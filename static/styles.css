@@ -396,6 +396,8 @@ select[multiple] {
   margin-top: 6px;
   color: #808080;
   font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ingest-log-panel {
@@ -2218,6 +2220,7 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  min-width: 0;
 }
 
 .admin-worker-card {
@@ -2226,6 +2229,8 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   border-radius: 8px;
   display: grid;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -2264,6 +2269,12 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   color: #aaa;
   font-size: 12px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 .admin-worker-foot {
@@ -2428,6 +2439,7 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
 .job-run-detail-panel {
   border-left: 2px solid #3c3f41;
   margin-left: 6px;
+  min-width: 0;
   padding: 10px 0 4px 12px;
 }
 
@@ -2466,7 +2478,14 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   color: #ccc;
   font-size: 11px;
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.job-run-param-row dd.job-run-model-codes {
+  max-height: 4.5em;
+  overflow-y: auto;
 }
 
 .job-run-params-raw summary {

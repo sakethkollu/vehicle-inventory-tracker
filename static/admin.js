@@ -78,6 +78,44 @@ function formatWorkerHeartbeat(iso) {
   return date.toLocaleString();
 }
 
+function isUnsafeJobDescription(desc) {
+  const text = String(desc || "");
+  return (
+    text.includes("run_ingest_task") ||
+    text.includes("run_geocode_task") ||
+    text.includes("run_catalog_sync_task") ||
+    text.includes("run_dealer_vehicle_refresh_task") ||
+    text.includes("mysql+pymysql://") ||
+    text.includes("mysql://") ||
+    text.length > 160
+  );
+}
+
+function formatWorkerJobDetail(job) {
+  if (!job) return "Running…";
+  const parts = [
+    job.message,
+    job.detail,
+    job.percent != null && Number.isFinite(Number(job.percent))
+      ? `Progress ${Math.round(Number(job.percent))}%`
+      : "",
+  ].filter(Boolean);
+  if (parts.length) {
+    return parts.join(" · ");
+  }
+  const desc = String(job.description || "").trim();
+  if (desc && !isUnsafeJobDescription(desc)) {
+    return desc;
+  }
+  return "Running…";
+}
+
+function formatModelCodesValue(codes) {
+  if (!Array.isArray(codes) || !codes.length) return "";
+  if (codes.length <= 12) return codes.join(", ");
+  return `${codes.length} models: ${codes.slice(0, 10).join(", ")}, …`;
+}
+
 function renderWorkersPanel(workersPayload) {
   const panel = qs("admin-workers-panel");
   const summaryEl = qs("admin-workers-summary");
@@ -158,19 +196,10 @@ function renderWorkersPanel(workersPayload) {
       const makeLabel = job?.make ? String(job.make).toUpperCase() : "";
       const jobType = job?.job_type ? formatWorkerJobType(job.job_type) : "";
       const jobRunId = job?.job_run_id != null ? `#${job.job_run_id}` : "";
-      const progress =
-        job?.percent != null && Number.isFinite(Number(job.percent))
-          ? `${Math.round(Number(job.percent))}%`
-          : "";
-      const detailParts = [
-        job?.message,
-        job?.detail,
-        progress ? `Progress ${progress}` : "",
-      ].filter(Boolean);
       const currentJobHtml = job
         ? `<div class="admin-worker-job">
             <div class="admin-worker-job-title">${escapeHtml([makeLabel, jobType, jobRunId].filter(Boolean).join(" · ") || job.task_label || "Current job")}</div>
-            <div class="admin-worker-job-detail">${escapeHtml(detailParts.join(" · ") || job.description || "Running…")}</div>
+            <div class="admin-worker-job-detail">${escapeHtml(formatWorkerJobDetail(job))}</div>
           </div>`
         : `<div class="admin-worker-job admin-worker-job-idle">Waiting for work</div>`;
       const queueLabels = (worker.queues || []).map((name) => escapeHtml(name)).join(", ") || "—";
@@ -238,10 +267,11 @@ function formatParamsDetail(run) {
   const params = run.params || {};
   const rows = [];
 
-  function addRow(label, value) {
+  function addRow(label, value, className = "") {
     if (value == null || value === "") return;
+    const classAttr = className ? ` class="${className}"` : "";
     rows.push(
-      `<div class="job-run-param-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`
+      `<div class="job-run-param-row"><dt>${escapeHtml(label)}</dt><dd${classAttr}>${escapeHtml(String(value))}</dd></div>`
     );
   }
 
@@ -252,7 +282,7 @@ function formatParamsDetail(run) {
     addRow("Page size", params.page_size);
     addRow("All models", params.all_models ? "yes" : "no");
     if (!params.all_models && Array.isArray(params.model_codes) && params.model_codes.length) {
-      addRow("Model codes", params.model_codes.join(", "));
+      addRow("Model codes", formatModelCodesValue(params.model_codes), "job-run-model-codes");
     }
     addRow("Series code", params.series_code);
     addRow("Lead ID", params.lead_id);
@@ -273,7 +303,7 @@ function formatParamsDetail(run) {
     addRow("Page size", params.page_size);
     addRow("All models", params.all_models ? "yes" : "no");
     if (!params.all_models && Array.isArray(params.model_codes) && params.model_codes.length) {
-      addRow("Model codes", params.model_codes.join(", "));
+      addRow("Model codes", formatModelCodesValue(params.model_codes), "job-run-model-codes");
     }
   }
 

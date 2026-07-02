@@ -897,7 +897,6 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         return jsonify(
             {
                 "ok": db_ready,
-                "database_url": make.database_url,
                 "make": make.slug,
                 "use_redis_jobs": runtime_settings.use_redis_jobs,
                 "db_ready": db_ready,

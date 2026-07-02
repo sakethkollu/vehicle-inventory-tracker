@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from vehicle_inventory.core.secrets import sanitize_secrets
 from vehicle_inventory.jobs.rq_maintenance import is_worker_stale, list_failed_jobs, worker_heartbeat_age_sec
 from vehicle_inventory.makes.registry import list_makes
 
@@ -88,7 +89,7 @@ def _serialize_current_job(redis, job) -> Optional[dict]:
         "status": job.get_status(),
         "func_name": func_name,
         "task_label": _task_label(func_name),
-        "description": getattr(job, "description", None),
+        "description": sanitize_secrets(getattr(job, "description", None)),
         "created_at": _iso(getattr(job, "created_at", None)),
         "started_at": _iso(getattr(job, "started_at", None)),
     }

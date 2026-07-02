@@ -17,8 +17,13 @@ from vehicle_inventory.jobs.runs import (
     ingest_result_from_progress,
 )
 from vehicle_inventory.jobs.service import get_job_service
+from vehicle_inventory.makes.registry import resolve_database_url
 
 log = get_logger(__name__)
+
+
+def _database_url_for_make(make_slug: str) -> str:
+    return resolve_database_url(make_slug)
 
 
 def _mark_job_running(store: JobRunStore, service, *, job_run_id: int, live_key: str, payload: dict) -> None:
@@ -33,12 +38,12 @@ def _mark_job_running(store: JobRunStore, service, *, job_run_id: int, live_key:
 def run_ingest_task(
     job_run_id: int,
     make_slug: str,
-    database_url: str,
     settings_payload: Dict[str, Any],
     all_models: bool,
     model_codes: Optional[List[str]],
 ) -> dict:
     configure_logging(level=get_settings().log_level, json_logs=get_settings().log_json)
+    database_url = _database_url_for_make(make_slug)
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     settings = get_settings()
@@ -109,10 +114,11 @@ def run_ingest_task(
     return progress.to_dict()
 
 
-def run_geocode_task(job_run_id: int, make_slug: str, database_url: str, params: Dict[str, Any]) -> dict:
+def run_geocode_task(job_run_id: int, make_slug: str, params: Dict[str, Any]) -> dict:
     configure_logging(level=get_settings().log_level, json_logs=get_settings().log_json)
     from vehicle_inventory.jobs.geocode_thread import GeocodeProgress
 
+    database_url = _database_url_for_make(make_slug)
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     conn = open_db_connection(database_url)
@@ -203,8 +209,9 @@ def run_geocode_task(job_run_id: int, make_slug: str, database_url: str, params:
         conn.close()
 
 
-def run_catalog_sync_task(job_run_id: int, make_slug: str, database_url: str, zip_code: str) -> dict:
+def run_catalog_sync_task(job_run_id: int, make_slug: str, zip_code: str) -> dict:
     configure_logging(level=get_settings().log_level, json_logs=get_settings().log_json)
+    database_url = _database_url_for_make(make_slug)
     store = JobRunStore(database_url)
     settings = get_settings()
     try:
@@ -229,12 +236,12 @@ def run_catalog_sync_task(job_run_id: int, make_slug: str, database_url: str, zi
 def run_dealer_vehicle_refresh_task(
     job_run_id: int,
     make_slug: str,
-    database_url: str,
     settings_payload: Dict[str, Any],
     all_models: bool,
     model_codes: Optional[List[str]],
 ) -> dict:
     configure_logging(level=get_settings().log_level, json_logs=get_settings().log_json)
+    database_url = _database_url_for_make(make_slug)
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     settings = get_settings()

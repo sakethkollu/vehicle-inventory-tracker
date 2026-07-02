@@ -4,6 +4,7 @@ import uvicorn
 
 from vehicle_inventory.core.config import get_settings
 from vehicle_inventory.core.logging import configure_logging, get_logger
+from vehicle_inventory.core.secrets import redact_database_url
 
 
 def main() -> None:
@@ -16,7 +17,12 @@ def main() -> None:
     settings = get_settings()
     configure_logging(level=settings.log_level, json_logs=settings.log_json)
     log = get_logger(__name__)
-    log.info("web_starting", host=args.host, port=args.port, database_url=settings.database_url)
+    log.info(
+        "web_starting",
+        host=args.host,
+        port=args.port,
+        database_url=redact_database_url(settings.database_url),
+    )
 
     uvicorn.run(
         "vehicle_inventory.app:create_app",

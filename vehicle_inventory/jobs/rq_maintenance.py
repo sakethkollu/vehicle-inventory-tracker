@@ -7,6 +7,7 @@ import socket
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
+from vehicle_inventory.core.secrets import sanitize_secrets
 from vehicle_inventory.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -104,9 +105,9 @@ def list_failed_jobs(redis_url: str, *, limit: int = 10) -> List[dict]:
                     "queue": name,
                     "id": job.id,
                     "func_name": getattr(job, "func_name", None),
-                    "description": getattr(job, "description", None),
+                    "description": sanitize_secrets(getattr(job, "description", None)),
                     "ended_at": getattr(job, "ended_at", None),
-                    "error": _job_error_snippet(job),
+                    "error": sanitize_secrets(_job_error_snippet(job)),
                 }
             )
             if len(rows) >= limit:

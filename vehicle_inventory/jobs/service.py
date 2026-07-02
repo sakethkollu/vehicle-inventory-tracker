@@ -112,6 +112,7 @@ class JobService:
         *args,
         job_id: str,
         timeout: int,
+        description: str,
     ):
         prepare_job_enqueue(queue, job_id)
         job = queue.enqueue(
@@ -119,6 +120,7 @@ class JobService:
             *args,
             job_id=job_id,
             job_timeout=timeout,
+            description=description,
         )
         log.info(
             "rq_job_enqueued",
@@ -174,12 +176,12 @@ class JobService:
                 "vehicle_inventory.jobs.worker_tasks.run_ingest_task",
                 job_run_id,
                 self.make.slug,
-                self.database_url,
                 _ingest_payload(ingest_payload, schema_path=self.settings.schema_path),
                 all_models,
                 model_codes,
                 job_id=f"{self.make.slug}-ingest-{job_run_id}",
                 timeout=INGEST_JOB_TIMEOUT_SEC,
+                description=f"{self.make.slug} ingest #{job_run_id}",
             )
             return self.ingest_status()
         self._ingest_thread.start(
@@ -237,12 +239,12 @@ class JobService:
                 "vehicle_inventory.jobs.worker_tasks.run_dealer_vehicle_refresh_task",
                 job_run_id,
                 self.make.slug,
-                self.database_url,
                 _ingest_payload(refresh_payload, schema_path=self.settings.schema_path),
                 all_models,
                 model_codes,
                 job_id=f"{self.make.slug}-dealer-refresh-{job_run_id}",
                 timeout=INGEST_JOB_TIMEOUT_SEC,
+                description=f"{self.make.slug} dealer refresh #{job_run_id}",
             )
             return self.ingest_status()
         self._ingest_thread.start_dealer_refresh(
@@ -292,10 +294,10 @@ class JobService:
                 "vehicle_inventory.jobs.worker_tasks.run_geocode_task",
                 job_run_id,
                 self.make.slug,
-                self.database_url,
                 params,
                 job_id=f"{self.make.slug}-geocode-{job_run_id}",
                 timeout=GEOCODE_JOB_TIMEOUT_SEC,
+                description=f"{self.make.slug} geocode #{job_run_id}",
             )
             return self.geocode_status()
         self._geocode_thread.start(
