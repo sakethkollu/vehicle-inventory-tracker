@@ -579,7 +579,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         conn = get_conn(readonly=True)
         try:
             payload = dealer_geo_stats(conn)
-            job = request_jobs().geocode_status()
+            store = JobRunStore(current_make().database_url)
+            job = request_jobs().resolved_geocode_status(store)
             db_remaining = int(payload.get("remaining", 0))
             if job.get("status") in {"idle", "completed", "failed"}:
                 job["remaining"] = db_remaining
@@ -735,7 +736,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
     @app.get("/api/jobs/ingest/status")
     def jobs_ingest_status():
-        return jsonify(request_jobs().ingest_status())
+        store = JobRunStore(current_make().database_url)
+        return jsonify(request_jobs().resolved_ingest_status(store))
 
     @app.post("/api/jobs/geocode/start")
     def jobs_geocode_start():
@@ -770,7 +772,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             payload = dict(dealer_geo_stats(conn))
         finally:
             conn.close()
-        job = request_jobs().geocode_status()
+        store = JobRunStore(current_make().database_url)
+        job = request_jobs().resolved_geocode_status(store)
         db_remaining = int(payload.get("remaining", 0))
         if job.get("status") in {"idle", "completed", "failed"}:
             job["remaining"] = db_remaining

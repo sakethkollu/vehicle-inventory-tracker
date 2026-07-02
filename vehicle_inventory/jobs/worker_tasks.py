@@ -21,6 +21,15 @@ from vehicle_inventory.jobs.service import get_job_service
 log = get_logger(__name__)
 
 
+def _mark_job_running(store: JobRunStore, service, *, job_run_id: int, live_key: str, payload: dict) -> None:
+    store.mark_running(job_run_id)
+    running = dict(payload)
+    running["status"] = "running"
+    if running.get("phase") == "queued":
+        running["phase"] = "starting"
+    service._set_live(live_key, running)
+
+
 def run_ingest_task(
     job_run_id: int,
     make_slug: str,
@@ -33,6 +42,18 @@ def run_ingest_task(
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     settings = get_settings()
+    _mark_job_running(
+        store,
+        service,
+        job_run_id=job_run_id,
+        live_key=service._live_ingest_key,
+        payload={
+            **service.ingest_status(),
+            "job_run_id": job_run_id,
+            "job_type": "ingest",
+            "message": "Worker picked up ingest job...",
+        },
+    )
 
     payload = dict(settings_payload)
     payload["all_models"] = all_models
@@ -95,6 +116,17 @@ def run_geocode_task(job_run_id: int, make_slug: str, database_url: str, params:
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     conn = open_db_connection(database_url)
+    _mark_job_running(
+        store,
+        service,
+        job_run_id=job_run_id,
+        live_key=service._live_geocode_key,
+        payload={
+            **service.geocode_status(),
+            "job_run_id": job_run_id,
+            "message": "Worker picked up geocode job...",
+        },
+    )
     progress = GeocodeProgress(
         status="running",
         phase="geocoding",
@@ -206,6 +238,18 @@ def run_dealer_vehicle_refresh_task(
     store = JobRunStore(database_url)
     service = get_job_service(make_slug=make_slug)
     settings = get_settings()
+    _mark_job_running(
+        store,
+        service,
+        job_run_id=job_run_id,
+        live_key=service._live_ingest_key,
+        payload={
+            **service.ingest_status(),
+            "job_run_id": job_run_id,
+            "job_type": "dealer_vehicle_refresh",
+            "message": "Worker picked up dealer vehicle refresh...",
+        },
+    )
 
     payload = dict(settings_payload)
 

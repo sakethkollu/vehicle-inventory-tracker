@@ -393,38 +393,6 @@ const geocodeUiState = {
   lastGeocodedRefresh: 0,
 };
 
-function isIngestRunning() {
-  return ingestUiState.running;
-}
-
-function renderAnalyticsPaused() {
-  const message = "Analytics paused while inventory ingest is running.";
-  const statsEl = qs("selection-stats");
-  if (statsEl) {
-    statsEl.innerHTML = `
-      <div class="stat-chip stat-chip-paused">
-        <div class="label">Analytics</div>
-        <div class="value">Paused during ingest</div>
-      </div>
-    `;
-  }
-
-  const distributionEl = qs("price-distribution");
-  if (distributionEl) {
-    distributionEl.innerHTML = `<h3>Price Distribution</h3><div class="chart-empty">${escapeHtml(message)}</div>`;
-  }
-
-  const insightsEl = qs("pricing-insights");
-  if (insightsEl) {
-    insightsEl.innerHTML = `<h3>Pricing Insights</h3><div class="chart-empty">${escapeHtml(message)}</div>`;
-  }
-
-  const geoEl = qs("inventory-geo-map");
-  if (geoEl) {
-    geoEl.innerHTML = `<h3>Geography &amp; MSRP Analytics</h3><div class="chart-empty">${escapeHtml(message)}</div>`;
-  }
-}
-
 function hydrateImages(root) {
   if (window.VIT?.hydrateImages) {
     VIT.hydrateImages(root);
@@ -464,7 +432,7 @@ function scheduleAnalyticsRefresh({ delayMs = 2000 } = {}) {
 }
 
 function showAnalyticsLoadingPlaceholder() {
-  if (analyticsState || isIngestRunning()) {
+  if (analyticsState) {
     return;
   }
   const statsEl = qs("selection-stats");
@@ -486,10 +454,6 @@ function showAnalyticsLoadingPlaceholder() {
 }
 
 async function refreshAnalyticsPanels() {
-  if (isIngestRunning()) {
-    renderAnalyticsPaused();
-    return;
-  }
   const token = ++analyticsRefreshToken;
   await Promise.all([loadAnalytics(), loadGeoMap()]);
   if (token !== analyticsRefreshToken) {
@@ -2831,10 +2795,6 @@ function setupPaginationControls() {
 }
 
 async function loadAnalytics() {
-  if (isIngestRunning()) {
-    renderAnalyticsPaused();
-    return;
-  }
   return withPanelLoading("analytics", async () => {
     let data = null;
     try {
@@ -2858,9 +2818,6 @@ async function loadAnalytics() {
 }
 
 async function loadGeoMap() {
-  if (isIngestRunning()) {
-    return;
-  }
   const container = qs("inventory-geo-map");
   if (!container) {
     return;
@@ -2937,21 +2894,16 @@ async function fetchAndRenderInventory(expectedToken) {
 
 async function loadInventory({ showLoading = true } = {}) {
   const token = ++inventoryLoadToken;
-  const useLoading = showLoading && !isIngestRunning();
-  if (useLoading) {
+  if (showLoading) {
     return withPanelLoading("table", () => fetchAndRenderInventory(token));
   }
   return fetchAndRenderInventory(token);
 }
 
-async function refreshInventoryData({ includeAnalytics = null, showTableLoading = null } = {}) {
-  const shouldLoadAnalytics = includeAnalytics ?? !isIngestRunning();
-  const useTableLoading = showTableLoading ?? !isIngestRunning();
-  await loadInventory({ showLoading: useTableLoading });
-  if (shouldLoadAnalytics) {
+async function refreshInventoryData({ includeAnalytics = true, showTableLoading = true } = {}) {
+  await loadInventory({ showLoading: showTableLoading });
+  if (includeAnalytics) {
     scheduleAnalyticsRefresh();
-  } else {
-    renderAnalyticsPaused();
   }
 }
 
@@ -3020,7 +2972,7 @@ function updateCatalogSelectionUi() {
       count === 1 ? "1 model selected" : `${count.toLocaleString()} models selected`;
   }
   const selectedBtn = qs("ingest-selected-btn");
-  if (selectedBtn && !ingestUiState.running) {
+  if (selectedBtn) {
     selectedBtn.disabled = count === 0;
   }
 }
@@ -3164,22 +3116,7 @@ async function loadCatalogModels() {
 
 function setIngestUiRunning(running) {
   ingestUiState.running = running;
-  for (const id of [
-    "ingest-refresh-catalog-btn",
-    "ingest-selected-btn",
-    "ingest-all-btn",
-    "catalog-select-all-btn",
-    "catalog-select-missing-btn",
-    "catalog-select-none-btn",
-  ]) {
-    const btn = qs(id);
-    if (!btn) continue;
-    if (id === "ingest-selected-btn") {
-      btn.disabled = running || ingestUiState.selectedModelCodes.size === 0;
-    } else {
-      btn.disabled = running;
-    }
-  }
+  updateCatalogSelectionUi();
 }
 
 function renderIngestProgress(status) {
@@ -3190,11 +3127,17 @@ function renderIngestProgress(status) {
   const detail = qs("ingest-progress-detail");
   if (!wrap || !label || !percent || !bar || !detail) return;
 
-  const isActive = status.status === "running";
+  const isActive = window.VIT?.isJobStatusActive?.(status.status);
   wrap.classList.toggle("hidden", !isActive && status.status !== "failed" && status.status !== "completed");
 
-  const pct = Math.max(0, Math.min(100, Number(status.percent || 0)));
-  label.textContent = status.message || status.status || "Idle";
+  const pct =
+    status.status === "queued"
+      ? 0
+      : Math.max(0, Math.min(100, Number(status.percent || 0)));
+  label.textContent =
+    status.status === "queued"
+      ? status.message || "Queued — waiting for worker..."
+      : status.message || status.status || "Idle";
   percent.textContent = `${pct.toFixed(0)}%`;
   bar.value = pct;
 
@@ -3227,15 +3170,14 @@ function renderIngestProgress(status) {
 async function pollIngestStatus() {
   const status = await fetchJson("/api/ingest/status");
   renderIngestProgress(status);
-  if (status.status === "running") {
+  if (window.VIT?.isJobStatusActive?.(status.status)) {
     setIngestUiRunning(true);
-    renderAnalyticsPaused();
     const persisted = Number(status.vehicles_persisted || 0);
     if (persisted - ingestUiState.lastPersistedRefresh >= 250) {
       ingestUiState.lastPersistedRefresh = persisted;
       await loadSummary();
       await loadInventory({ showLoading: false });
-      renderAnalyticsPaused();
+      scheduleAnalyticsRefresh({ delayMs: 500 });
     }
     return;
   }
@@ -3315,10 +3257,9 @@ async function startIngest({ allModels = false } = {}) {
 
   setIngestUiRunning(true);
   ingestUiState.watchedIngestSession = true;
-  renderAnalyticsPaused();
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
-    status: "running",
+    status: "queued",
     message: "Starting ingest...",
     percent: 0,
   });
@@ -3347,19 +3288,15 @@ function setupIngestHandlers() {
   });
 }
 
-async function refreshAll({ includeAnalytics = null, showTableLoading = null } = {}) {
+async function refreshAll({ includeAnalytics = true, showTableLoading = true } = {}) {
   paginationState.page = 1;
   histogramState.min = null;
   histogramState.max = null;
-  const shouldLoadAnalytics = includeAnalytics ?? !isIngestRunning();
-  const useTableLoading = showTableLoading ?? !isIngestRunning();
   await loadSummary();
-  await loadInventory({ showLoading: useTableLoading });
-  await loadFilters({ silent: useTableLoading });
-  if (shouldLoadAnalytics) {
+  await loadInventory({ showLoading: showTableLoading });
+  await loadFilters({ silent: showTableLoading });
+  if (includeAnalytics) {
     scheduleAnalyticsRefresh({ delayMs: 2000 });
-  } else {
-    renderAnalyticsPaused();
   }
 }
 
@@ -5284,7 +5221,7 @@ async function ensureDealerGeocodeJob() {
 
     renderGeocodeProgress(status);
 
-    if (status.job?.status === "running") {
+    if (window.VIT?.isJobStatusActive?.(status.job?.status)) {
       startGeocodePolling();
       return;
     }
@@ -5319,7 +5256,8 @@ function renderGeocodeProgress(status) {
   if (!panel || !label || !percent || !bar || !detail) return;
 
   const job = status.job || {};
-  const isRunning = job.status === "running";
+  const isActive = window.VIT?.isJobStatusActive?.(job.status);
+  const isRunning = isActive;
   const dealersTotal = Number(status.dealers_in_inventory || job.total || 0);
   const processed = Number(job.processed || 0);
   const geocoded = Number(status.geocoded || job.geocoded || 0);
@@ -5335,7 +5273,9 @@ function renderGeocodeProgress(status) {
   panel.classList.toggle("is-complete", !isRunning && remaining <= 0 && job.status !== "failed");
 
   label.textContent =
-    job.message ||
+    job.status === "queued"
+      ? job.message || "Queued — waiting for worker..."
+      : job.message ||
     (isRunning
       ? "Geocoding dealer locations…"
       : remaining > 0
@@ -5370,7 +5310,7 @@ async function pollGeocodeStatus() {
   renderGeocodeProgress(status);
   const job = status.job || {};
 
-  if (job.status === "running") {
+  if (window.VIT?.isJobStatusActive?.(job.status)) {
     const geocoded = Number(status.geocoded || 0);
     if (geocoded - geocodeUiState.lastGeocodedRefresh >= 50) {
       geocodeUiState.lastGeocodedRefresh = geocoded;
@@ -5656,11 +5596,11 @@ window.addEventListener("load", async () => {
     startUserLocationWatch();
     await initializeSearchLocation();
     const ingestStatus = await fetchJson("/api/ingest/status").catch(() => ({ status: "idle" }));
-    const ingestActive = ingestStatus.status === "running";
+    const ingestActive = window.VIT?.isJobStatusActive?.(ingestStatus.status);
     if (ingestActive) {
       setIngestUiRunning(true);
     }
-    await refreshAll({ includeAnalytics: !ingestActive, showTableLoading: !ingestActive });
+    await refreshAll();
     if (ingestActive) {
       startIngestPolling();
     }

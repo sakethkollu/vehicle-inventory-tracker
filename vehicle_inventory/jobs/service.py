@@ -11,7 +11,7 @@ from vehicle_inventory.core.config import Settings, get_settings
 from vehicle_inventory.jobs.geocode_thread import GeocodeJobManager, GeocodeProgress
 from vehicle_inventory.jobs.ingest_thread import IngestJobManager
 from vehicle_inventory.ingest.progress import IngestProgress
-from vehicle_inventory.jobs.runs import JobRunStore
+from vehicle_inventory.jobs.runs import JobRunStore, job_status_is_active
 from vehicle_inventory.core.logging import get_logger
 from vehicle_inventory.makes.registry import MakeProfile, get_default_make_slug, get_make_profile
 
@@ -99,12 +99,10 @@ class JobService:
         return self._geocode_thread.status()
 
     def ingest_is_running(self) -> bool:
-        status = self.ingest_status()
-        return status.get("status") == "running"
+        return job_status_is_active(self.ingest_status().get("status"))
 
     def geocode_is_running(self) -> bool:
-        status = self.geocode_status()
-        return status.get("status") == "running"
+        return job_status_is_active(self.geocode_status().get("status"))
 
     def start_ingest(
         self,
@@ -114,8 +112,6 @@ class JobService:
         all_models: bool = False,
         trigger_source: str = "ui",
     ) -> dict:
-        if self.ingest_is_running():
-            raise RuntimeError("An ingest job is already running.")
         if self.settings.use_redis_jobs:
             store = self._store()
             from vehicle_inventory.jobs.runs import ingest_params_from_payload
@@ -132,11 +128,12 @@ class JobService:
                 params,
                 trigger_source=trigger_source,
                 message="Queued ingest job...",
+                status="queued",
             )
             self._set_live(
                 self._live_ingest_key,
                 {
-                    "status": "running",
+                    "status": "queued",
                     "phase": "queued",
                     "message": "Queued ingest job...",
                     "job_run_id": job_run_id,
@@ -174,8 +171,6 @@ class JobService:
         all_models: bool = False,
         trigger_source: str = "ui",
     ) -> dict:
-        if self.ingest_is_running():
-            raise RuntimeError("An ingest job is already running.")
         if self.make.slug != "mazda":
             raise RuntimeError("Dealer vehicle refresh is only supported for Mazda.")
         if self.settings.use_redis_jobs:
@@ -194,11 +189,12 @@ class JobService:
                 params,
                 trigger_source=trigger_source,
                 message="Queued dealer vehicle refresh...",
+                status="queued",
             )
             self._set_live(
                 self._live_ingest_key,
                 {
-                    "status": "running",
+                    "status": "queued",
                     "phase": "queued",
                     "message": "Queued dealer vehicle refresh...",
                     "job_run_id": job_run_id,
@@ -237,8 +233,6 @@ class JobService:
         workers: int = 8,
         trigger_source: str = "ui",
     ) -> dict:
-        if self.geocode_is_running():
-            raise RuntimeError("A dealer geocoding job is already running.")
         if self.settings.use_redis_jobs:
             store = self._store()
             from vehicle_inventory.jobs.runs import geocode_params
@@ -250,13 +244,14 @@ class JobService:
                 params,
                 trigger_source=trigger_source,
                 message="Queued geocode job...",
+                status="queued",
             )
             if self._redis is not None:
                 self._redis.delete(self._cancel_geocode_key)
             self._set_live(
                 self._live_geocode_key,
                 GeocodeProgress(
-                    status="running",
+                    status="queued",
                     phase="queued",
                     message="Queued geocode job...",
                     job_run_id=job_run_id,
@@ -309,9 +304,9 @@ class JobService:
             return False
         return bool(self._redis.get(self._cancel_geocode_key))
 
-    def _rq_job_is_active(self, job_type: str, job_run_id: int) -> bool:
+    def _rq_job_status(self, job_type: str, job_run_id: int) -> str:
         if not self.settings.use_redis_jobs or self._redis is None:
-            return False
+            return "missing"
         from rq.exceptions import NoSuchJobError
         from rq.job import Job
 
@@ -319,12 +314,23 @@ class JobService:
             job_type
         )
         if not prefix:
-            return False
+            return "missing"
         try:
             rq_job = Job.fetch(f"{self.make.slug}-{prefix}-{job_run_id}", connection=self._redis)
         except NoSuchJobError:
-            return False
-        return bool(rq_job.is_queued or rq_job.is_started)
+            return "missing"
+        if rq_job.is_queued:
+            return "queued"
+        if rq_job.is_started:
+            return "started"
+        if rq_job.is_finished:
+            return "finished"
+        if rq_job.is_failed:
+            return "failed"
+        return "missing"
+
+    def _rq_job_is_active(self, job_type: str, job_run_id: int) -> bool:
+        return self._rq_job_status(job_type, job_run_id) in {"queued", "started"}
 
     def _sanitize_live_status(
         self,
@@ -335,7 +341,7 @@ class JobService:
         store: JobRunStore,
     ) -> dict:
         status = live.get("status")
-        if status != "running":
+        if not job_status_is_active(status):
             return live
 
         if not self.settings.use_redis_jobs:
@@ -351,7 +357,7 @@ class JobService:
             return {"status": "idle"}
 
         run = store.get(int(job_run_id))
-        if run and run.get("status") != "running":
+        if run and not job_status_is_active(run.get("status")):
             terminal = {
                 "status": run["status"],
                 "job_run_id": job_run_id,
@@ -364,6 +370,30 @@ class JobService:
                 terminal.update(result)
             self._set_live(live_key, terminal)
             return terminal
+
+        rq_state = self._rq_job_status(job_type, int(job_run_id))
+        if rq_state == "queued":
+            resolved = {
+                **live,
+                "status": "queued",
+                "phase": "queued",
+                "message": live.get("message") or "Waiting for worker...",
+            }
+            if resolved != live:
+                self._set_live(live_key, resolved)
+            return resolved
+
+        if rq_state == "started":
+            resolved = dict(live)
+            if resolved.get("status") != "running":
+                resolved["status"] = "running"
+            if resolved.get("phase") == "queued":
+                resolved["phase"] = "starting"
+            if run and run.get("status") == "queued":
+                store.mark_running(int(job_run_id))
+            if resolved != live:
+                self._set_live(live_key, resolved)
+            return resolved
 
         if not self._rq_job_is_active(job_type, int(job_run_id)):
             self._set_live(live_key, {"status": "idle"})
@@ -402,7 +432,7 @@ class JobService:
 
     @staticmethod
     def jobs_are_active(ingest: dict, geocode: dict) -> bool:
-        return ingest.get("status") == "running" or geocode.get("status") == "running"
+        return job_status_is_active(ingest.get("status")) or job_status_is_active(geocode.get("status"))
 
     def list_runs(self, **kwargs) -> List[dict]:
         return self._store().list_runs(**kwargs)

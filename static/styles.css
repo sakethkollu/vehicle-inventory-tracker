@@ -355,6 +355,11 @@ select[multiple] {
   color: #61afef;
 }
 
+.job-run-status.queued {
+  background: #3a354a;
+  color: #c678dd;
+}
+
 .job-run-status.cancelled {
   background: #3a3a2d;
   color: #d19a66;

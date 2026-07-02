@@ -185,6 +185,14 @@ function jobRunProgressData(run, liveProgress) {
       indeterminate: false,
     };
   }
+  if (status === "queued") {
+    return {
+      pct: 0,
+      label: "Queued",
+      state: "queued",
+      indeterminate: true,
+    };
+  }
   if (status === "running") {
     const indeterminate = pct == null;
     return {
@@ -203,6 +211,7 @@ function renderJobRunProgressBar(progress) {
     progress.state === "complete" ? "is-complete" : "",
     progress.state === "failed" ? "is-failed" : "",
     progress.state === "cancelled" ? "is-cancelled" : "",
+    progress.state === "queued" ? "is-queued" : "",
     progress.indeterminate ? "is-indeterminate" : "",
   ]
     .filter(Boolean)
@@ -221,12 +230,27 @@ function renderJobRunProgressBar(progress) {
 function buildLiveProgressMap(payload) {
   const map = {};
   const ingest = payload?.ingest || {};
-  if (ingest.job_run_id && ingest.status === "running") {
+  if (ingest.job_run_id && window.VIT?.isJobStatusActive?.(ingest.status)) {
     map[ingest.job_run_id] = ingest;
   }
   const geocode = payload?.geocode?.job || {};
-  if (geocode.job_run_id && geocode.status === "running") {
+  if (geocode.job_run_id && window.VIT?.isJobStatusActive?.(geocode.status)) {
     map[geocode.job_run_id] = geocode;
+  }
+  for (const run of payload?.recent_runs || []) {
+    if (!run?.job_run_id || !window.VIT?.isJobStatusActive?.(run.status)) {
+      continue;
+    }
+    if (map[run.job_run_id]) {
+      continue;
+    }
+    map[run.job_run_id] = {
+      ...(run.result || {}),
+      status: run.status,
+      job_run_id: run.job_run_id,
+      job_type: run.job_type,
+      message: run.message || "",
+    };
   }
   return map;
 }
@@ -416,11 +440,11 @@ function updateCatalogSelectionUi() {
       count === 1 ? "1 model selected" : `${count.toLocaleString()} models selected`;
   }
   const selectedBtn = qs("ingest-selected-btn");
-  if (selectedBtn && !ingestUiState.running) {
+  if (selectedBtn) {
     selectedBtn.disabled = count === 0;
   }
   const dealerRefreshSelectedBtn = qs("ingest-dealer-refresh-selected-btn");
-  if (dealerRefreshSelectedBtn && !ingestUiState.running) {
+  if (dealerRefreshSelectedBtn) {
     dealerRefreshSelectedBtn.disabled = count === 0;
   }
 }
@@ -562,24 +586,10 @@ async function loadCatalogModels() {
 
 function setIngestUiRunning(running) {
   ingestUiState.running = running;
-  for (const id of [
-    "ingest-refresh-catalog-btn",
-    "ingest-sync-dealers-btn",
-    "ingest-selected-btn",
-    "ingest-all-btn",
-    "ingest-dealer-refresh-selected-btn",
-    "ingest-dealer-refresh-all-btn",
-    "catalog-select-all-btn",
-    "catalog-select-missing-btn",
-    "catalog-select-none-btn",
-  ]) {
-    const btn = qs(id);
-    if (!btn) continue;
-    if (id === "ingest-selected-btn" || id === "ingest-dealer-refresh-selected-btn") {
-      btn.disabled = running || ingestUiState.selectedModelCodes.size === 0;
-    } else {
-      btn.disabled = running;
-    }
+  updateCatalogSelectionUi();
+  const dealerRefreshSelectedBtn = qs("ingest-dealer-refresh-selected-btn");
+  if (dealerRefreshSelectedBtn) {
+    dealerRefreshSelectedBtn.disabled = ingestUiState.selectedModelCodes.size === 0;
   }
 }
 
@@ -591,14 +601,20 @@ function renderIngestProgress(status) {
   const detail = qs("ingest-progress-detail");
   if (!wrap || !label || !percent || !bar || !detail) return;
 
-  const isActive = status.status === "running";
+  const isActive = window.VIT?.isJobStatusActive?.(status.status);
   wrap.classList.toggle(
     "hidden",
     !isActive && status.status !== "failed" && status.status !== "completed"
   );
 
-  const pct = Math.max(0, Math.min(100, Number(status.percent || 0)));
-  label.textContent = status.message || status.status || "Idle";
+  const pct =
+    status.status === "queued"
+      ? 0
+      : Math.max(0, Math.min(100, Number(status.percent || 0)));
+  label.textContent =
+    status.status === "queued"
+      ? status.message || "Queued — waiting for worker..."
+      : status.message || status.status || "Idle";
   percent.textContent = `${pct.toFixed(0)}%`;
   bar.value = pct;
 
@@ -650,7 +666,7 @@ function renderIngestLogs(status) {
   const logs = Array.isArray(status.logs) ? status.logs : [];
   const show =
     logs.length > 0 ||
-    status.status === "running" ||
+    window.VIT?.isJobStatusActive?.(status.status) ||
     status.status === "failed" ||
     status.status === "completed";
   panel.classList.toggle("hidden", !show);
@@ -659,7 +675,7 @@ function renderIngestLogs(status) {
   const stickToBottom =
     output.scrollHeight - output.clientHeight - output.scrollTop < 48;
   output.textContent = text;
-  if (stickToBottom || status.status === "running") {
+  if (stickToBottom || window.VIT?.isJobStatusActive?.(status.status)) {
     output.scrollTop = output.scrollHeight;
   }
 }
@@ -670,7 +686,10 @@ function isAdminJobActive(payload) {
   }
   const ingestStatus = payload?.ingest?.status;
   const geocodeStatus = payload?.geocode?.job?.status;
-  return ingestStatus === "running" || geocodeStatus === "running";
+  return (
+    window.VIT?.isJobStatusActive?.(ingestStatus) ||
+    window.VIT?.isJobStatusActive?.(geocodeStatus)
+  );
 }
 
 function scheduleAdminPoll(delayMs) {
@@ -697,11 +716,14 @@ async function pollAdminState() {
 
     renderOverview(payload);
 
-    if (previousIngestStatus === "running" && lastIngestStatus === "completed") {
+    if (
+      window.VIT?.isJobStatusActive?.(previousIngestStatus) &&
+      lastIngestStatus === "completed"
+    ) {
       await loadCatalogModels();
     }
 
-    setIngestUiRunning(ingest.status === "running");
+    setIngestUiRunning(window.VIT?.isJobStatusActive?.(ingest.status));
     scheduleAdminPoll(isAdminJobActive(payload) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
   } catch (err) {
     console.error(err);
@@ -757,7 +779,7 @@ async function startDealerVehicleRefresh({ allModels = false } = {}) {
   setIngestUiRunning(true);
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
-    status: "running",
+    status: "queued",
     message: "Starting dealer ZIP vehicle refresh...",
     percent: 0,
   });
@@ -782,7 +804,7 @@ async function startIngest({ allModels = false } = {}) {
   setIngestUiRunning(true);
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
-    status: "running",
+    status: "queued",
     message: "Starting ingest...",
     percent: 0,
   });
@@ -823,7 +845,7 @@ function setupIngestHandlers() {
 function renderOverview(payload) {
   const ingest = payload.ingest || {};
   renderIngestProgress(ingest);
-  if (ingest.status === "running") {
+  if (window.VIT?.isJobStatusActive?.(ingest.status)) {
     setIngestUiRunning(true);
   }
 
@@ -845,19 +867,13 @@ function renderOverview(payload) {
 
   const startBtn = qs("admin-geocode-start-btn");
   const cancelBtn = qs("admin-geocode-cancel-btn");
-  const geocodeRunning = geocode.status === "running";
-  const ingestRunning = ingest.status === "running";
+  const geocodeRunning = window.VIT?.isJobStatusActive?.(geocode.status);
   if (startBtn) {
-    startBtn.disabled = geocodeRunning;
-    startBtn.title = geocodeRunning ? "A geocode job is already running." : "";
+    startBtn.disabled = false;
+    startBtn.title = "";
   }
   if (cancelBtn) {
     cancelBtn.disabled = !geocodeRunning;
-  }
-  if (startBtn) {
-    startBtn.title = ingestRunning
-      ? "Ingest is running; geocode may auto-start when ingest completes."
-      : startBtn.title;
   }
 
   renderJobSummary(payload.summary || {});

@@ -7,6 +7,7 @@ from vehicle_inventory.jobs.runs import (
     geocode_params,
     ingest_params_from_payload,
     ingest_params_from_settings,
+    job_status_is_active,
     live_progress_result,
 )
 
@@ -63,3 +64,10 @@ def test_ingest_params_from_settings():
 
 def test_live_progress_result_strips_job_run_id():
     assert live_progress_result({"job_run_id": 9, "status": "running"}) == {"status": "running"}
+
+
+def test_job_status_is_active():
+    assert job_status_is_active("queued") is True
+    assert job_status_is_active("running") is True
+    assert job_status_is_active("completed") is False
+    assert job_status_is_active("idle") is False

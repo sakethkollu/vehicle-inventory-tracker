@@ -14,6 +14,10 @@ VIT.getIngestDefaults = function getIngestDefaults(slug) {
   return VIT.MAKE_DEFAULTS[slug] || VIT.MAKE_DEFAULTS.toyota;
 };
 
+VIT.isJobStatusActive = function isJobStatusActive(status) {
+  return status === "running" || status === "queued";
+};
+
 VIT.withMakeQuery = function withMakeQuery(url) {
   const resolved = new URL(url, window.location.origin);
   resolved.searchParams.set("make", VIT.currentMake);

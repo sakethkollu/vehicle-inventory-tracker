@@ -12,7 +12,11 @@ from vehicle_inventory.db import utc_now
 from vehicle_inventory.db.sql_compat import ensure_index, table_exists_sql
 
 JOB_TYPES = ("ingest", "geocode", "catalog_sync")
-JOB_STATUSES = ("running", "completed", "failed", "cancelled")
+JOB_STATUSES = ("queued", "running", "completed", "failed", "cancelled")
+
+
+def job_status_is_active(status: Optional[str]) -> bool:
+    return str(status or "").lower() in {"queued", "running"}
 
 
 def ensure_job_runs_table(conn: DbConnection) -> None:
@@ -74,7 +78,10 @@ class JobRunStore:
         *,
         trigger_source: str = "ui",
         message: str = "",
+        status: str = "running",
     ) -> int:
+        if status not in JOB_STATUSES:
+            raise ValueError(f"Invalid job status: {status}")
         ensure_job_runs_table(self._conn())
         started_at = utc_now()
         conn = self._conn()
@@ -87,7 +94,7 @@ class JobRunStore:
                 """,
                 (
                     job_type,
-                    "running",
+                    status,
                     started_at,
                     json.dumps(params, separators=(",", ":")),
                     message,
@@ -96,6 +103,22 @@ class JobRunStore:
             )
             conn.commit()
             return int(conn.lastrowid)
+        finally:
+            conn.close()
+
+    def mark_running(self, job_run_id: int) -> bool:
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                UPDATE job_runs
+                SET status = 'running'
+                WHERE job_run_id = ? AND status = 'queued'
+                """,
+                (job_run_id,),
+            )
+            conn.commit()
+            return conn.rowcount > 0
         finally:
             conn.close()
 
@@ -149,10 +172,10 @@ class JobRunStore:
         message: Optional[str] = None,
     ) -> bool:
         """Persist terminal live-worker state when the DB row is still running."""
-        if status == "running":
+        if status == "running" or status == "queued":
             return False
         run = self.get(job_run_id)
-        if not run or run.get("status") != "running":
+        if not run or not job_status_is_active(run.get("status")):
             return False
         self.finish(job_run_id, status, result=result, error=error, message=message)
         return True
@@ -196,13 +219,13 @@ class JobRunStore:
         finally:
             conn.close()
 
-    def list_running_runs(self, *, limit: int = 100) -> List[dict]:
+    def list_active_runs(self, *, limit: int = 100) -> List[dict]:
         conn = self._conn()
         try:
             rows = conn.execute(
                 """
                 SELECT * FROM job_runs
-                WHERE status = 'running'
+                WHERE status IN ('queued', 'running')
                 ORDER BY started_at DESC
                 LIMIT ?
                 """,
@@ -211,6 +234,9 @@ class JobRunStore:
             return [_normalize_run(dict(row)) for row in rows]
         finally:
             conn.close()
+
+    def list_running_runs(self, *, limit: int = 100) -> List[dict]:
+        return self.list_active_runs(limit=limit)
 
     def summary(self, *, since_days: int = 30) -> Dict[str, dict]:
         runs = self.list_runs(since_days=since_days, limit=500)
@@ -316,7 +342,7 @@ def live_progress_result(live: dict) -> dict:
 def reconcile_live_job_run(store: JobRunStore, live: dict) -> bool:
     job_run_id = live.get("job_run_id")
     status = live.get("status")
-    if not job_run_id or status in (None, "idle", "running"):
+    if not job_run_id or status in (None, "idle", "running", "queued"):
         return False
     return store.reconcile_if_stale(
         int(job_run_id),
@@ -398,7 +424,7 @@ def reconcile_rq_stale_runs(
         if rq_job.is_finished:
             result = rq_job.result if isinstance(rq_job.result, dict) else {}
             terminal_status = str(result.get("status") or "completed")
-            if terminal_status == "running":
+            if terminal_status in {"running", "queued"}:
                 terminal_status = "completed"
             if store.reconcile_if_stale(
                 job_run_id,
@@ -418,5 +444,7 @@ def reconcile_rq_stale_runs(
                 message="Reconciled from worker queue (failed).",
             ):
                 repaired += 1
+        elif rq_job.is_started and str(run.get("status") or "") == "queued":
+            store.mark_running(job_run_id)
 
     return repaired
