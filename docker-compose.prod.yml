@@ -14,5 +14,5 @@ services:
     ports: !reset []
 
   web:
-    ports:
+    ports: !reset
       - "127.0.0.1:5052:5050"
