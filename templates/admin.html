@@ -114,9 +114,13 @@
       <section class="admin-card" id="admin-workers-card">
         <div class="admin-section-header">
           <h2>Background Workers</h2>
-          <span id="admin-workers-summary" class="admin-muted"></span>
+          <div class="admin-actions admin-actions-inline">
+            <span id="admin-workers-summary" class="admin-muted"></span>
+            <button id="admin-workers-repair-btn" type="button" class="admin-btn admin-btn-secondary">Repair queues</button>
+          </div>
         </div>
         <div id="admin-workers-queues" class="admin-workers-queues"></div>
+        <div id="admin-workers-failed" class="admin-workers-failed"></div>
         <div id="admin-workers-panel" class="admin-workers-panel">Loading worker status…</div>
       </section>
 

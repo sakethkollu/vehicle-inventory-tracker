@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from vehicle_inventory.jobs.rq_maintenance import list_failed_jobs
 from vehicle_inventory.makes.registry import list_makes
 
 _JOB_ID_RE = re.compile(
@@ -138,6 +139,7 @@ def _serialize_worker(redis, worker) -> dict:
 
 def _queue_stats(redis) -> List[dict]:
     from rq import Queue
+    from rq.intermediate_queue import IntermediateQueue
 
     rows: List[dict] = []
     for name in _QUEUE_NAMES:
@@ -147,10 +149,12 @@ def _queue_stats(redis) -> List[dict]:
             started = queue.started_job_registry.count
         except Exception:
             started = 0
+        intermediate = IntermediateQueue(queue.key, redis)
         rows.append(
             {
                 "name": name,
                 "queued": int(queue.count),
+                "intermediate": len(intermediate.get_job_ids()),
                 "started": int(started),
                 "failed": int(len(queue.failed_job_registry)),
             }
@@ -158,8 +162,12 @@ def _queue_stats(redis) -> List[dict]:
     return rows
 
 
+def get_expected_worker_count() -> int:
+    return max(1, int(os.environ.get("WORKER_CONCURRENCY", "4")))
+
+
 def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
-    expected_workers = max(1, int(os.environ.get("WORKER_CONCURRENCY", "2")))
+    expected_workers = get_expected_worker_count()
     if not use_redis_jobs:
         return {
             "enabled": False,
@@ -186,6 +194,8 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
     }
     queues = _queue_stats(redis)
     queued_total = sum(int(row.get("queued") or 0) for row in queues)
+    intermediate_total = sum(int(row.get("intermediate") or 0) for row in queues)
+    failed_jobs = list_failed_jobs(redis_url, limit=8)
 
     message = None
     if summary["total"] == 0:
@@ -193,6 +203,19 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
     elif summary["total"] < expected_workers:
         message = (
             f"{summary['total']} of {expected_workers} expected worker(s) online."
+        )
+    elif summary["total"] > expected_workers:
+        message = (
+            f"{summary['total']} worker(s) online "
+            f"({expected_workers} configured in WORKER_CONCURRENCY)."
+        )
+    elif intermediate_total > 0 and queued_total == 0:
+        message = (
+            f"{intermediate_total} job(s) stuck in intermediate queue — run Repair queues."
+        )
+    elif queued_total > 0 and summary["busy"] == 0 and summary["idle"] > 0:
+        message = (
+            f"{queued_total} job(s) queued but no worker started them — run Repair queues."
         )
     elif queued_total > 0 and summary["busy"] == summary["total"]:
         message = f"{queued_total} job(s) queued — all workers are busy."
@@ -203,6 +226,7 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
         "queues": queues,
         "workers": serialized,
         "summary": summary,
+        "failed_jobs": failed_jobs,
         "message": message,
         "makes": [
             {"slug": profile.slug, "display_name": profile.display_name}

@@ -13,6 +13,7 @@ from vehicle_inventory.jobs.ingest_thread import IngestJobManager
 from vehicle_inventory.ingest.progress import IngestProgress
 from vehicle_inventory.jobs.runs import JobRunStore, job_status_is_active
 from vehicle_inventory.core.logging import get_logger
+from vehicle_inventory.jobs.rq_maintenance import prepare_job_enqueue
 from vehicle_inventory.makes.registry import MakeProfile, get_default_make_slug, get_make_profile
 
 log = get_logger(__name__)
@@ -104,6 +105,30 @@ class JobService:
     def geocode_is_running(self) -> bool:
         return job_status_is_active(self.geocode_status().get("status"))
 
+    def _enqueue(
+        self,
+        queue,
+        func_path: str,
+        *args,
+        *,
+        job_id: str,
+        timeout: int,
+    ):
+        prepare_job_enqueue(queue, job_id)
+        job = queue.enqueue(
+            func_path,
+            *args,
+            job_id=job_id,
+            timeout=timeout,
+        )
+        log.info(
+            "rq_job_enqueued",
+            queue=queue.name,
+            job_id=job.id,
+            status=job.get_status(refresh=False),
+        )
+        return job
+
     def start_ingest(
         self,
         *,
@@ -145,7 +170,8 @@ class JobService:
                     "make": self.make.slug,
                 },
             )
-            self._queue.enqueue(
+            self._enqueue(
+                self._queue,
                 "vehicle_inventory.jobs.worker_tasks.run_ingest_task",
                 job_run_id,
                 self.make.slug,
@@ -154,7 +180,7 @@ class JobService:
                 all_models,
                 model_codes,
                 job_id=f"{self.make.slug}-ingest-{job_run_id}",
-                job_timeout=INGEST_JOB_TIMEOUT_SEC,
+                timeout=INGEST_JOB_TIMEOUT_SEC,
             )
             return self.ingest_status()
         self._ingest_thread.start(
@@ -207,7 +233,8 @@ class JobService:
                     "make": self.make.slug,
                 },
             )
-            self._queue.enqueue(
+            self._enqueue(
+                self._queue,
                 "vehicle_inventory.jobs.worker_tasks.run_dealer_vehicle_refresh_task",
                 job_run_id,
                 self.make.slug,
@@ -216,7 +243,7 @@ class JobService:
                 all_models,
                 model_codes,
                 job_id=f"{self.make.slug}-dealer-refresh-{job_run_id}",
-                job_timeout=INGEST_JOB_TIMEOUT_SEC,
+                timeout=INGEST_JOB_TIMEOUT_SEC,
             )
             return self.ingest_status()
         self._ingest_thread.start_dealer_refresh(
@@ -261,14 +288,15 @@ class JobService:
                     job_run_id=job_run_id,
                 ).to_dict(),
             )
-            self._geocode_queue.enqueue(
+            self._enqueue(
+                self._geocode_queue,
                 "vehicle_inventory.jobs.worker_tasks.run_geocode_task",
                 job_run_id,
                 self.make.slug,
                 self.database_url,
                 params,
                 job_id=f"{self.make.slug}-geocode-{job_run_id}",
-                job_timeout=GEOCODE_JOB_TIMEOUT_SEC,
+                timeout=GEOCODE_JOB_TIMEOUT_SEC,
             )
             return self.geocode_status()
         self._geocode_thread.start(

@@ -11,16 +11,25 @@ from rq import Worker
 
 from vehicle_inventory.core.config import get_settings
 from vehicle_inventory.core.logging import configure_logging, get_logger
+from vehicle_inventory.jobs.rq_maintenance import default_worker_name, repair_rq_fleet
 
 
-def _run_worker(*, redis_url: str, log_level: str, log_json: bool, worker_name: str | None = None) -> None:
+def _run_worker(
+    *,
+    redis_url: str,
+    log_level: str,
+    log_json: bool,
+    worker_index: int | None = None,
+    worker_name: str | None = None,
+) -> None:
     configure_logging(level=log_level, json_logs=log_json)
     log = get_logger(__name__)
     redis_conn = Redis.from_url(redis_url)
+    resolved_name = worker_name or default_worker_name(index=worker_index)
     worker = Worker(
         ["ingest", "geocode", "default"],
         connection=redis_conn,
-        name=worker_name,
+        name=resolved_name,
     )
     log.info(
         "worker_process_starting",
@@ -38,7 +47,14 @@ def main() -> None:
     if not settings.use_redis_jobs:
         log.warning("worker_redis_disabled", message="USE_REDIS_JOBS is false; worker will idle.")
 
-    concurrency = max(1, int(os.environ.get("WORKER_CONCURRENCY", "2")))
+    concurrency = max(1, int(os.environ.get("WORKER_CONCURRENCY", "4")))
+    if settings.use_redis_jobs:
+        try:
+            repair = repair_rq_fleet(settings.redis_url)
+            log.info("worker_startup_repair", **repair)
+        except Exception:
+            log.exception("worker_startup_repair_failed")
+
     log.info(
         "worker_starting",
         queues=["ingest", "geocode", "default"],
@@ -51,7 +67,7 @@ def main() -> None:
             redis_url=settings.redis_url,
             log_level=settings.log_level,
             log_json=settings.log_json,
-            worker_name="vit-worker-1",
+            worker_index=1,
         )
         return
 
@@ -63,7 +79,7 @@ def main() -> None:
                 "redis_url": settings.redis_url,
                 "log_level": settings.log_level,
                 "log_json": settings.log_json,
-                "worker_name": f"vit-worker-{index + 1}",
+                "worker_index": index + 1,
             },
             name=f"rq-worker-{index + 1}",
             daemon=False,

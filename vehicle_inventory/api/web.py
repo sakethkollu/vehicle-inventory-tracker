@@ -266,6 +266,21 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             return jsonify({"ok": False, "error": "No geocoding job is running."}), 409
         return jsonify({"ok": True, "job": request_jobs().geocode_status()})
 
+    @app.post("/api/admin/workers/repair")
+    @require_admin_api
+    def admin_workers_repair():
+        runtime_settings = get_settings()
+        if not runtime_settings.use_redis_jobs:
+            return jsonify({"ok": False, "error": "Redis job queue is disabled."}), 409
+        from vehicle_inventory.jobs.rq_maintenance import repair_rq_fleet
+
+        result = repair_rq_fleet(runtime_settings.redis_url)
+        workers = get_worker_fleet_status(
+            redis_url=runtime_settings.redis_url,
+            use_redis_jobs=runtime_settings.use_redis_jobs,
+        )
+        return jsonify({"ok": True, "repair": result, "workers": workers})
+
     @app.get("/favicon.ico")
     def favicon():
         static_dir = Path(app.static_folder or ".")

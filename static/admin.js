@@ -82,19 +82,24 @@ function renderWorkersPanel(workersPayload) {
   const panel = qs("admin-workers-panel");
   const summaryEl = qs("admin-workers-summary");
   const queuesEl = qs("admin-workers-queues");
+  const failedEl = qs("admin-workers-failed");
   if (!panel) return;
 
   const payload = workersPayload || {};
   const summary = payload.summary || {};
   const queues = payload.queues || [];
   const workerRows = payload.workers || [];
+  const failedJobs = payload.failed_jobs || [];
 
   if (summaryEl) {
     if (!payload.enabled) {
       summaryEl.textContent = payload.message || "Redis jobs disabled";
     } else {
+      const total = Number(summary.total || 0);
       const expected = Number(payload.expected_workers || 0);
-      summaryEl.textContent = `${summary.total || 0}/${expected || "?"} online · ${summary.busy || 0} busy · ${summary.idle || 0} idle`;
+      const onlineText =
+        expected > 0 && total < expected ? `${total}/${expected} online` : `${total} online`;
+      summaryEl.textContent = `${onlineText} · ${summary.busy || 0} busy · ${summary.idle || 0} idle`;
     }
   }
 
@@ -107,9 +112,32 @@ function renderWorkersPanel(workersPayload) {
       queuesEl.innerHTML = queues
         .map(
           (queue) =>
-            `<span class="admin-workers-queue-chip"><strong>${escapeHtml(queue.name)}</strong>: ${Number(queue.queued || 0).toLocaleString()} queued · ${Number(queue.started || 0).toLocaleString()} started · ${Number(queue.failed || 0).toLocaleString()} failed</span>`
+            `<span class="admin-workers-queue-chip"><strong>${escapeHtml(queue.name)}</strong>: ${Number(queue.queued || 0).toLocaleString()} queued · ${Number(queue.intermediate || 0).toLocaleString()} stuck · ${Number(queue.started || 0).toLocaleString()} started · ${Number(queue.failed || 0).toLocaleString()} failed</span>`
         )
         .join("");
+    }
+  }
+
+  if (failedEl) {
+    if (!payload.enabled) {
+      failedEl.innerHTML = "";
+    } else {
+      const parts = [];
+      if (payload.message) {
+        parts.push(`<p class="admin-muted">${escapeHtml(payload.message)}</p>`);
+      }
+      if (failedJobs.length) {
+        parts.push(`<div class="admin-workers-failed-list">
+          <div class="admin-muted">Recent failed queue jobs</div>
+          ${failedJobs
+            .map(
+              (job) =>
+                `<div class="admin-workers-failed-item"><strong>${escapeHtml(job.queue || "queue")}</strong> · ${escapeHtml(job.id || "job")}<div class="admin-muted">${escapeHtml(job.error || "Unknown error")}</div></div>`
+            )
+            .join("")}
+        </div>`);
+      }
+      failedEl.innerHTML = parts.join("");
     }
   }
 
@@ -1122,6 +1150,22 @@ async function refreshOverview() {
   renderOverview(payload);
 }
 
+async function repairWorkerQueues() {
+  const btn = qs("admin-workers-repair-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const payload = await fetchJson("/api/admin/workers/repair", { method: "POST", body: "{}" });
+    if (payload.workers) {
+      renderWorkersPanel(payload.workers);
+    }
+    await refreshOverview();
+  } catch (err) {
+    alert(err.message || "Failed to repair worker queues.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function startGeocodeJob() {
   const btn = qs("admin-geocode-start-btn");
   if (btn) btn.disabled = true;
@@ -1163,6 +1207,9 @@ async function setupAdmin() {
   });
   qs("admin-geocode-cancel-btn")?.addEventListener("click", () => {
     cancelGeocodeJob().catch((err) => console.error(err));
+  });
+  qs("admin-workers-repair-btn")?.addEventListener("click", () => {
+    repairWorkerQueues().catch((err) => console.error(err));
   });
 
   document.addEventListener("visibilitychange", () => {

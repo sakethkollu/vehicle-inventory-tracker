@@ -2181,6 +2181,30 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   margin-bottom: 12px;
 }
 
+.admin-actions-inline {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-workers-failed {
+  margin-bottom: 12px;
+}
+
+.admin-workers-failed-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-workers-failed-item {
+  background: #2b2b2b;
+  border: 1px solid #4a4f54;
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
 .admin-workers-queue-chip {
   background: #2b2b2b;
   border: 1px solid #4a4f54;
