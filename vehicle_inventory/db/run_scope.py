@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from vehicle_inventory.db.backend import DbConnection
+from vehicle_inventory.db.backend import DbConnection, commit_with_retry, execute_with_retry
 from vehicle_inventory.db.sql_compat import ensure_index, table_exists_sql
 
 
@@ -40,7 +40,8 @@ def pin_series_latest_run(conn: DbConnection, series_code: str, run_id: int) -> 
     if not code:
         return
     ensure_series_latest_runs_table(conn)
-    conn.execute(
+    execute_with_retry(
+        conn,
         """
         INSERT INTO series_latest_runs (series_code, run_id, refreshed_at)
         VALUES (?, ?, ?)
@@ -67,8 +68,9 @@ def refresh_series_latest_runs(conn: DbConnection, *, force: bool = False) -> in
             return int(row["total"])
 
     ts = utc_now()
-    conn.execute("DELETE FROM series_latest_runs")
-    conn.execute(
+    execute_with_retry(conn, "DELETE FROM series_latest_runs")
+    execute_with_retry(
+        conn,
         """
         INSERT INTO series_latest_runs (series_code, run_id, refreshed_at)
         SELECT v.series_code, MAX(vr.run_id), ?

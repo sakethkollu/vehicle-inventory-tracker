@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from vehicle_inventory.db import InventoryDb, utc_now
-from vehicle_inventory.db.backend import commit_with_retry
+from vehicle_inventory.db.backend import run_transaction_with_retry
 from vehicle_inventory.db.run_scope import pin_series_latest_run, refresh_series_latest_runs
 from vehicle_inventory.ingest.progress import IngestProgress, ProgressCallback, emit_progress
 from vehicle_inventory.makes.mazda.client import (
@@ -419,10 +419,46 @@ def _estimated_total_pages(total_vehicles: int, page_size: int) -> int:
     return max(1, math.ceil(max(total_vehicles, 1) / max(page_size, 1)))
 
 
-def _commit_ingest_page(db: InventoryDb, *, run_id: int, series_code: str) -> None:
-    """Flush one fetched page so inventory/API queries can see new vehicles immediately."""
-    pin_series_latest_run(db.conn, series_code, run_id)
-    commit_with_retry(db.conn)
+def _persist_page_batch(
+    db: InventoryDb,
+    *,
+    run_id: int,
+    series_code: str,
+    vehicles: List[MazdaVehicle],
+    dealer_distance: dict[int, float],
+    dealer_cache: Dict[int, dict],
+    client: MazdaInventoryClient,
+    settings: MazdaIngestSettings,
+    catalog_index: Dict[str, str],
+    ts: str,
+) -> None:
+    """Persist one fetched page and commit, retrying the whole page on MySQL deadlocks."""
+    if not vehicles:
+        return
+
+    def write_page() -> None:
+        for vehicle in vehicles:
+            _persist_vehicle(
+                db,
+                run_id=run_id,
+                vehicle=vehicle,
+                dealer_distance=dealer_distance,
+                dealer_cache=dealer_cache,
+                client=client,
+                settings=settings,
+                catalog_index=catalog_index,
+                ts=ts,
+            )
+        pin_series_latest_run(db.conn, series_code, run_id)
+
+    run_transaction_with_retry(db.conn, write_page)
+
+
+def _finalize_ingest_runs(db: InventoryDb) -> None:
+    run_transaction_with_retry(
+        db.conn,
+        lambda: refresh_series_latest_runs(db.conn, force=True),
+    )
 
 
 def _pagination_should_stop(
@@ -699,15 +735,20 @@ def run_mazda_ingest(
                     break
 
                 new_on_page = 0
+                page_vehicles: List[MazdaVehicle] = []
                 for vehicle in vehicles:
                     if vehicle.vin in seen_vins:
                         continue
-                    seen_vins.add(vehicle.vin)
+                    page_vehicles.append(vehicle)
                     new_on_page += 1
-                    _persist_vehicle(
+
+                progress.current_page = page_no
+                if page_vehicles:
+                    _persist_page_batch(
                         db,
                         run_id=run_id,
-                        vehicle=vehicle,
+                        series_code=carline,
+                        vehicles=page_vehicles,
                         dealer_distance=dealer_distance,
                         dealer_cache=dealer_cache,
                         client=client,
@@ -715,10 +756,10 @@ def run_mazda_ingest(
                         catalog_index=catalog_index,
                         ts=ts,
                     )
-                    vehicles_persisted += 1
-                    model_saved += 1
-
-                progress.current_page = page_no
+                    for vehicle in page_vehicles:
+                        seen_vins.add(vehicle.vin)
+                    vehicles_persisted += len(page_vehicles)
+                    model_saved += len(page_vehicles)
                 progress.vehicles_fetched = len(seen_vins)
                 progress.vehicles_persisted = vehicles_persisted
                 model_fraction = min(page_no / max(total_pages, 1), 1.0)
@@ -733,9 +774,6 @@ def run_mazda_ingest(
                         f"{vehicles_persisted:,} total saved)"
                     ),
                 )
-                if new_on_page > 0:
-                    _commit_ingest_page(db, run_id=run_id, series_code=carline)
-
                 if _pagination_should_stop(
                     vehicles_on_page=len(vehicles),
                     new_on_page=new_on_page,
@@ -754,8 +792,7 @@ def run_mazda_ingest(
 
             progress.completed_models.append(carline)
 
-        refresh_series_latest_runs(db.conn, force=True)
-        commit_with_retry(db.conn)
+        _finalize_ingest_runs(db)
 
         from vehicle_inventory.jobs.service import get_job_service
 
@@ -944,15 +981,20 @@ def run_mazda_dealer_vehicle_refresh(
                         break
 
                     new_on_page = 0
+                    page_vehicles: List[MazdaVehicle] = []
                     for vehicle in vehicles:
                         if vehicle.vin in seen_vins:
                             continue
-                        seen_vins.add(vehicle.vin)
+                        page_vehicles.append(vehicle)
                         new_on_page += 1
-                        _persist_vehicle(
+
+                    progress.current_page = page_no
+                    if page_vehicles:
+                        _persist_page_batch(
                             db,
                             run_id=run_id,
-                            vehicle=vehicle,
+                            series_code=carline,
+                            vehicles=page_vehicles,
                             dealer_distance=dealer_distance,
                             dealer_cache=dealer_cache,
                             client=client,
@@ -960,10 +1002,10 @@ def run_mazda_dealer_vehicle_refresh(
                             catalog_index=catalog_index,
                             ts=ts,
                         )
-                        vehicles_persisted += 1
-                        model_saved += 1
-
-                    progress.current_page = page_no
+                        for vehicle in page_vehicles:
+                            seen_vins.add(vehicle.vin)
+                        vehicles_persisted += len(page_vehicles)
+                        model_saved += len(page_vehicles)
                     progress.vehicles_fetched = len(seen_vins)
                     progress.vehicles_persisted = vehicles_persisted
                     step_fraction = (step_base + min(page_no / max(total_pages, 1), 1.0)) / total_steps
@@ -977,9 +1019,6 @@ def run_mazda_dealer_vehicle_refresh(
                             f"{vehicles_persisted:,} total saved)"
                         ),
                     )
-                    if new_on_page > 0:
-                        _commit_ingest_page(db, run_id=run_id, series_code=carline)
-
                     if _pagination_should_stop(
                         vehicles_on_page=len(vehicles),
                         new_on_page=new_on_page,
@@ -1003,8 +1042,7 @@ def run_mazda_dealer_vehicle_refresh(
             if vehicles_persisted > zip_saved_before:
                 zips_with_inventory += 1
 
-        refresh_series_latest_runs(db.conn, force=True)
-        commit_with_retry(db.conn)
+        _finalize_ingest_runs(db)
 
         from vehicle_inventory.jobs.service import get_job_service
 

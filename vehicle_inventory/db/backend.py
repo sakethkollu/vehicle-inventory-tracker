@@ -195,6 +195,25 @@ def commit_with_retry(conn: DbConnection, *, attempts: int = 6) -> None:
             delay_sec = min(delay_sec * 2, 1.0)
 
 
+def run_transaction_with_retry(conn: DbConnection, fn, *, attempts: int = 6) -> None:
+    """Run ``fn`` inside a transaction, retrying the whole unit on MySQL deadlocks."""
+    delay_sec = 0.05
+    for attempt in range(attempts):
+        try:
+            fn()
+            commit_with_retry(conn, attempts=attempts)
+            return
+        except Exception as exc:
+            if not _is_deadlock_error(exc) or attempt >= attempts - 1:
+                raise
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            time.sleep(delay_sec)
+            delay_sec = min(delay_sec * 2, 1.0)
+
+
 def fetchone_with_retry(
     conn: DbConnection,
     sql: str,
