@@ -1,7 +1,6 @@
 # Production overlay for ZimaOS / homelab deploy (Caddy on host network).
-# - web uses host networking and listens on 127.0.0.1:5052 (same as other Caddy backends)
-# - mysql/redis published on localhost only so host-network web can reach them
-# - worker stays on the default bridge and keeps using mysql/redis service names
+# - Web published on host 127.0.0.1:5052 only (Caddy reverse_proxy 127.0.0.1:5052)
+# - mysql/redis stay on the internal Docker network (not exposed to host)
 #
 # Usage:
 #   cp .env.example .env   # set secrets (see below)
@@ -14,25 +13,15 @@
 
 services:
   redis:
-    ports: !reset ["127.0.0.1:16379:6379"]
+    ports: !reset []
 
   mysql:
-    ports: !reset ["127.0.0.1:13306:3306"]
+    ports: !reset []
 
   web:
-    network_mode: host
-    ports: !reset []
-    command:
-      [
-        "uvicorn",
-        "vehicle_inventory.app:create_app",
-        "--factory",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "5052",
-      ]
+    ports: !reset ["127.0.0.1:5052:5050"]
     environment:
-      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@127.0.0.1:13306/${MYSQL_DATABASE}
-      REDIS_URL: redis://127.0.0.1:16379/0
-      MAZDA_DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@127.0.0.1:13306/${MAZDA_DATABASE:-mazda_inventory}
+      # Always use Docker service names (not 127.0.0.1) unless web also uses network_mode: host
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      REDIS_URL: redis://redis:6379/0
+      MAZDA_DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MAZDA_DATABASE:-mazda_inventory}
