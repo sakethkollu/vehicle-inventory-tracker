@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from vehicle_inventory.jobs.rq_maintenance import list_failed_jobs
+from vehicle_inventory.jobs.rq_maintenance import is_worker_stale, list_failed_jobs, worker_heartbeat_age_sec
 from vehicle_inventory.makes.registry import list_makes
 
 _JOB_ID_RE = re.compile(
@@ -110,7 +110,7 @@ def _serialize_current_job(redis, job) -> Optional[dict]:
     return payload
 
 
-def _serialize_worker(redis, worker) -> dict:
+def _serialize_worker(redis, worker, *, stale: bool = False) -> dict:
     current_job = None
     try:
         current_job = worker.get_current_job()
@@ -125,6 +125,8 @@ def _serialize_worker(redis, worker) -> dict:
     except Exception:
         queues = [q.name for q in getattr(worker, "queues", []) or []]
 
+    heartbeat_age = worker_heartbeat_age_sec(worker)
+
     return {
         "name": worker.name,
         "state": state,
@@ -133,6 +135,8 @@ def _serialize_worker(redis, worker) -> dict:
         "queues": queues,
         "birth_date": _iso(getattr(worker, "birth_date", None)),
         "last_heartbeat": _iso(getattr(worker, "last_heartbeat", None)),
+        "heartbeat_age_sec": round(heartbeat_age, 1) if heartbeat_age is not None else None,
+        "stale": stale,
         "current_job": _serialize_current_job(redis, current_job),
     }
 
@@ -174,7 +178,7 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
             "expected_workers": expected_workers,
             "queues": [],
             "workers": [],
-            "summary": {"total": 0, "busy": 0, "idle": 0, "suspended": 0},
+            "summary": {"total": 0, "stale": 0, "busy": 0, "idle": 0, "suspended": 0},
             "message": "Redis job queue is disabled (USE_REDIS_JOBS=0).",
         }
 
@@ -182,15 +186,25 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
     from rq import Worker
 
     redis = Redis.from_url(redis_url)
-    workers = Worker.all(connection=redis)
-    serialized = [_serialize_worker(redis, worker) for worker in workers]
-    serialized.sort(key=lambda row: str(row.get("name") or ""))
+    all_workers = Worker.all(connection=redis)
+    active_workers = []
+    stale_workers = []
+    for worker in all_workers:
+        stale = is_worker_stale(worker)
+        row = _serialize_worker(redis, worker, stale=stale)
+        if stale:
+            stale_workers.append(row)
+        else:
+            active_workers.append(row)
+    active_workers.sort(key=lambda row: str(row.get("name") or ""))
+    stale_workers.sort(key=lambda row: str(row.get("name") or ""))
 
     summary = {
-        "total": len(serialized),
-        "busy": sum(1 for row in serialized if row.get("state") == "busy"),
-        "idle": sum(1 for row in serialized if row.get("state") == "idle"),
-        "suspended": sum(1 for row in serialized if row.get("state") == "suspended"),
+        "total": len(active_workers),
+        "stale": len(stale_workers),
+        "busy": sum(1 for row in active_workers if row.get("state") == "busy"),
+        "idle": sum(1 for row in active_workers if row.get("state") == "idle"),
+        "suspended": sum(1 for row in active_workers if row.get("state") == "suspended"),
     }
     queues = _queue_stats(redis)
     queued_total = sum(int(row.get("queued") or 0) for row in queues)
@@ -206,8 +220,13 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
         )
     elif summary["total"] > expected_workers:
         message = (
-            f"{summary['total']} worker(s) online "
+            f"{summary['total']} active worker(s) online "
             f"({expected_workers} configured in WORKER_CONCURRENCY)."
+        )
+    elif summary["stale"] > 0:
+        message = (
+            f"{summary['stale']} stale worker registration(s) from old containers remain in Redis. "
+            f"Click Repair queues to remove them."
         )
     elif intermediate_total > 0 and queued_total == 0:
         message = (
@@ -224,7 +243,8 @@ def get_worker_fleet_status(*, redis_url: str, use_redis_jobs: bool) -> dict:
         "enabled": True,
         "expected_workers": expected_workers,
         "queues": queues,
-        "workers": serialized,
+        "workers": active_workers,
+        "stale_workers": stale_workers,
         "summary": summary,
         "failed_jobs": failed_jobs,
         "message": message,

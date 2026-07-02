@@ -4,13 +4,73 @@ from __future__ import annotations
 
 import os
 import socket
-from typing import List
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple
 
 from vehicle_inventory.core.logging import get_logger
 
 log = get_logger(__name__)
 
 _QUEUE_NAMES = ("ingest", "geocode", "default")
+# RQ workers normally heartbeat about once a minute; treat older entries as dead containers.
+STALE_WORKER_HEARTBEAT_SEC = 90
+
+
+def _parse_timestamp(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        text = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def worker_heartbeat_age_sec(worker, *, now: Optional[datetime] = None) -> Optional[float]:
+    heartbeat = _parse_timestamp(getattr(worker, "last_heartbeat", None))
+    if heartbeat is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return max(0.0, (current - heartbeat).total_seconds())
+
+
+def is_worker_stale(worker, *, max_age_sec: int = STALE_WORKER_HEARTBEAT_SEC) -> bool:
+    age = worker_heartbeat_age_sec(worker)
+    if age is None:
+        return True
+    return age > max_age_sec
+
+
+def split_workers_by_health(workers) -> Tuple[list, list]:
+    active: list = []
+    stale: list = []
+    for worker in workers:
+        if is_worker_stale(worker):
+            stale.append(worker)
+        else:
+            active.append(worker)
+    return active, stale
+
+
+def cleanup_stale_workers(redis_url: str, *, max_age_sec: int = STALE_WORKER_HEARTBEAT_SEC) -> int:
+    from redis import Redis
+    from rq import Worker
+
+    redis = Redis.from_url(redis_url)
+    removed = 0
+    for worker in Worker.all(connection=redis):
+        if not is_worker_stale(worker, max_age_sec=max_age_sec):
+            continue
+        try:
+            worker.register_death()
+            removed += 1
+            log.info("rq_stale_worker_removed", worker=worker.name)
+        except Exception:
+            log.exception("rq_stale_worker_remove_failed", worker=getattr(worker, "name", "?"))
+    return removed
 
 
 def _job_error_snippet(rq_job) -> str:
@@ -61,6 +121,7 @@ def repair_rq_fleet(redis_url: str) -> dict:
     from rq.intermediate_queue import IntermediateQueue
 
     redis = Redis.from_url(redis_url)
+    removed_workers = cleanup_stale_workers(redis_url)
     reclaimed_jobs = 0
     queue_stats: List[dict] = []
 
@@ -86,6 +147,7 @@ def repair_rq_fleet(redis_url: str) -> dict:
         )
 
     payload = {
+        "removed_workers": removed_workers,
         "reclaimed_jobs": reclaimed_jobs,
         "queues": queue_stats,
     }

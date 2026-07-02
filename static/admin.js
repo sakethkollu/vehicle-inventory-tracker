@@ -1158,6 +1158,11 @@ async function repairWorkerQueues() {
     if (payload.workers) {
       renderWorkersPanel(payload.workers);
     }
+    const removed = Number(payload.repair?.removed_workers || 0);
+    const reclaimed = Number(payload.repair?.reclaimed_jobs || 0);
+    if (removed || reclaimed) {
+      alert(`Repaired queues: removed ${removed} stale worker registration(s), reclaimed ${reclaimed} stuck job(s).`);
+    }
     await refreshOverview();
   } catch (err) {
     alert(err.message || "Failed to repair worker queues.");
