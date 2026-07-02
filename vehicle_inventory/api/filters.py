@@ -8,6 +8,7 @@ from vehicle_inventory.geo.dealer_geo import (
     ensure_dealer_geo_cache_table,
     expand_state_filter_values,
     geocode_postal_code,
+    normalize_dealer_display_distance,
     normalize_state_code,
     normalize_us_zip,
     state_label,
@@ -439,9 +440,7 @@ def _query_dealer_facets(
     ).fetchall()
     items = _merge_facet_rows(universe_rows, {row["value"] for row in available_rows}, label_key="label")
     for item in items:
-        distance = item.get("distance_miles")
-        if distance is not None:
-            item["distance_miles"] = round(float(distance), 1)
+        item["distance_miles"] = normalize_dealer_display_distance(item.get("distance_miles"))
     return items
 
 
