@@ -1,0 +1,27 @@
+# Ingest: OEM inventory clients (Toyota GraphQL, Mazda REST)
+requests>=2.32.0
+
+# Ingest: headless browser for AWS WAF token (run once: python -m playwright install chromium)
+playwright>=1.49.0
+
+# Web API (FastAPI + legacy Flask routes)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+a2wsgi>=1.10.0
+flask>=3.0.0
+
+# Background jobs
+redis>=5.0.0
+rq>=2.0.0
+
+# Database (optional MySQL)
+pymysql>=1.1.0
+
+# Logging
+structlog>=24.4.0
+
+# Frontend: dealer geocoding
+geopy>=2.4.1
+
+# Tests
+pytest>=8.0.0

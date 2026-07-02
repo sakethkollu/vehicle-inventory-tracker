@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ app_title | default('Vehicle Inventory Tracker') }} Admin</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260702p" />
+  </head>
+  <body class="admin-page" data-make="{{ make_slug | default('toyota') }}">
+    <main class="admin-shell">
+      <header class="admin-header">
+        <div>
+          <h1>{{ app_title | default('Vehicle Inventory Tracker') }} Admin</h1>
+          <p class="admin-subtitle">Job status, controls, and run history for <strong data-make-label>{{ make_name | default('vehicle') }}</strong>.</p>
+          <label class="make-switcher admin-make-switcher">
+            Make
+            <select id="make-select" aria-label="Vehicle make"></select>
+          </label>
+        </div>
+        <div class="admin-header-actions">
+          <a href="/" class="admin-link">Back to Explorer</a>
+          {% if authenticated %}
+          <form method="post" action="/admin/logout">
+            <button type="submit" class="admin-btn admin-btn-secondary">Log out</button>
+          </form>
+          {% endif %}
+        </div>
+      </header>
+
+      {% if not admin_enabled %}
+      <section class="admin-card admin-card-warning">
+        <h2>Admin disabled</h2>
+        <p>Set the <code>ADMIN_PASSWORD</code> environment variable and restart the server.</p>
+      </section>
+      {% elif login_error %}
+      <section class="admin-card admin-card-warning">
+        <p>{{ login_error }}</p>
+      </section>
+      {% endif %}
+
+      {% if admin_enabled and not authenticated %}
+      <section class="admin-card admin-login-card">
+        <h2>Sign in</h2>
+        <form method="post" action="/admin/login" class="admin-login-form">
+          <label>
+            Password
+            <input type="password" name="password" autocomplete="current-password" required autofocus />
+          </label>
+          <button type="submit" class="admin-btn">Sign in</button>
+        </form>
+      </section>
+      {% elif admin_enabled and authenticated %}
+      <section class="admin-card admin-ingest-section">
+        <div class="admin-section-header">
+          <div>
+            <h2 id="admin-ingest-title">Refresh inventory</h2>
+            <p id="admin-ingest-subtitle" class="admin-subtitle">Sync the model catalog, then ingest selected models or the full catalog.</p>
+          </div>
+        </div>
+
+        <section class="ingest-panel" id="ingest-panel">
+          <div id="ingest-loading" class="loading-overlay hidden" aria-hidden="true">
+            <div class="loading-spinner-wrap" role="status" aria-live="polite">
+              <div class="loading-spinner" aria-hidden="true"></div>
+              <span>Loading model catalog…</span>
+            </div>
+          </div>
+
+          <div class="ingest-controls">
+            <label>
+              Search ZIP
+              <input id="ingest-zip-code" type="text" inputmode="numeric" maxlength="5" value="" />
+            </label>
+            <label>
+              Search radius (miles)
+              <input id="ingest-distance" type="number" min="1" max="5000" value="" />
+            </label>
+          </div>
+
+          <div class="ingest-actions">
+            <button id="ingest-refresh-catalog-btn" type="button">Sync Model Catalog</button>
+            <button id="ingest-sync-dealers-btn" type="button" class="hidden" data-mazda-only>Sync Dealers (Nationwide)</button>
+            <button id="ingest-dealer-refresh-selected-btn" type="button" class="hidden" data-mazda-only disabled>Refresh Selected (1 mi/ZIP)</button>
+            <button id="ingest-dealer-refresh-all-btn" type="button" class="hidden" data-mazda-only>Refresh All (1 mi/ZIP)</button>
+            <button id="ingest-selected-btn" type="button" disabled>Refresh Selected Models</button>
+            <button id="ingest-all-btn" type="button">Refresh All Models</button>
+          </div>
+
+          <div class="catalog-selection-bar">
+            <button id="catalog-select-all-btn" type="button">Select All</button>
+            <button id="catalog-select-missing-btn" type="button">Select Missing Data</button>
+            <button id="catalog-select-none-btn" type="button">Select None</button>
+            <span id="catalog-selection-count" class="catalog-selection-count">0 models selected</span>
+          </div>
+
+          <div id="catalog-model-list" class="catalog-model-list"></div>
+
+          <div id="ingest-progress-wrap" class="ingest-progress-wrap hidden">
+            <div class="ingest-progress-meta">
+              <span id="ingest-progress-label">Idle</span>
+              <span id="ingest-progress-percent">0%</span>
+            </div>
+            <progress id="ingest-progress-bar" max="100" value="0"></progress>
+            <div id="ingest-progress-detail" class="ingest-progress-detail"></div>
+            <div id="ingest-log-panel" class="ingest-log-panel hidden">
+              <div class="ingest-log-header">Ingest log</div>
+              <pre id="ingest-log-output" class="ingest-log-output" aria-live="polite"></pre>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="admin-grid">
+        <article class="admin-card" id="admin-geocode-card">
+          <h2>Dealer Geocoding</h2>
+          <div id="admin-geocode-status" class="admin-status-block">Loading…</div>
+          <div class="admin-actions">
+            <button id="admin-geocode-start-btn" type="button" class="admin-btn">Start geocode (all remaining)</button>
+            <button id="admin-geocode-cancel-btn" type="button" class="admin-btn admin-btn-secondary">Cancel geocode</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="admin-card">
+        <div class="admin-section-header">
+          <h2>Job Run History</h2>
+          <span id="admin-last-updated" class="admin-muted"></span>
+        </div>
+        <div id="admin-job-summary" class="job-runs-summary"></div>
+        <div class="job-runs-table-wrap">
+          <table class="job-runs-table admin-job-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th>Trigger</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="admin-job-runs-tbody">
+              <tr>
+                <td colspan="8" class="job-runs-empty">Loading job history…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {% endif %}
+    </main>
+    {% if admin_enabled and authenticated %}
+    <script src="/static/vit-common.js?v=20260702p"></script>
+    <script src="/static/image-cache.js?v=20260702p"></script>
+    <script src="/static/admin.js?v=20260702g"></script>
+    {% endif %}
+  </body>
+</html>

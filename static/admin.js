@@ -1,0 +1,1029 @@
+function qs(id) {
+  return document.getElementById(id);
+}
+
+async function fetchJson(url, options = {}) {
+  const resolvedUrl = window.VIT?.withMakeQuery ? window.VIT.withMakeQuery(url) : url;
+  const res = await fetch(resolvedUrl, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return body;
+}
+
+function formatDurationSec(sec) {
+  if (sec == null || sec === "") return "—";
+  const value = Number(sec);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 60) return `${value.toFixed(1)}s`;
+  const mins = Math.floor(value / 60);
+  const rem = Math.round(value % 60);
+  if (mins < 60) return rem ? `${mins}m ${rem}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
+function formatStartedAt(iso) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString();
+}
+
+function formatJobType(jobType) {
+  return (
+    {
+      ingest: "Ingest",
+      geocode: "Geocode",
+      catalog_sync: "Catalog sync",
+      dealer_sync: "Dealer sync",
+      dealer_vehicle_refresh: "Dealer ZIP refresh",
+    }[jobType] || jobType
+  );
+}
+
+function summarizeParams(run) {
+  const params = run.params || {};
+  if (run.job_type === "ingest") {
+    const models = params.all_models
+      ? "all models"
+      : `${(params.model_codes || []).length} model(s)`;
+    return `ZIP ${params.zip_code ?? "—"}, ${params.distance ?? "—"} mi, ${models}`;
+  }
+  if (run.job_type === "geocode") {
+    const limit = params.limit == null ? "all remaining" : `${params.limit} max`;
+    return `${limit}, ${params.workers || 1} worker(s)${params.force ? ", force" : ""}`;
+  }
+  if (run.job_type === "catalog_sync") {
+    const parts = [`ZIP ${params.zip_code ?? "—"}`];
+    if (params.distance != null) parts.push(`${params.distance} mi`);
+    return parts.join(", ");
+  }
+  if (run.job_type === "dealer_sync") {
+    return params.make ? `${params.make} nationwide` : "Nationwide dealer discovery";
+  }
+  if (run.job_type === "dealer_vehicle_refresh") {
+    const models = params.all_models
+      ? "all models"
+      : `${(params.model_codes || []).length} model(s)`;
+    return `${params.distance ?? 1} mi per dealer ZIP, ${models}`;
+  }
+  return JSON.stringify(params);
+}
+
+function formatParamsDetail(run) {
+  const params = run.params || {};
+  const rows = [];
+
+  function addRow(label, value) {
+    if (value == null || value === "") return;
+    rows.push(
+      `<div class="job-run-param-row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`
+    );
+  }
+
+  if (run.job_type === "ingest") {
+    addRow("Make", params.make);
+    addRow("ZIP code", params.zip_code);
+    addRow("Radius (mi)", params.distance);
+    addRow("Page size", params.page_size);
+    addRow("All models", params.all_models ? "yes" : "no");
+    if (!params.all_models && Array.isArray(params.model_codes) && params.model_codes.length) {
+      addRow("Model codes", params.model_codes.join(", "));
+    }
+    addRow("Series code", params.series_code);
+    addRow("Lead ID", params.lead_id);
+  } else if (run.job_type === "geocode") {
+    addRow("Limit", params.limit == null ? "all remaining" : params.limit);
+    addRow("Workers", params.workers);
+    addRow("Delay (sec)", params.delay_sec);
+    addRow("Force re-geocode", params.force ? "yes" : "no");
+  } else if (run.job_type === "catalog_sync") {
+    addRow("Make", params.make);
+    addRow("ZIP code", params.zip_code);
+    addRow("Radius (mi)", params.distance);
+  } else if (run.job_type === "dealer_sync") {
+    addRow("Make", params.make);
+  } else if (run.job_type === "dealer_vehicle_refresh") {
+    addRow("Make", params.make);
+    addRow("Radius (mi)", params.distance);
+    addRow("Page size", params.page_size);
+    addRow("All models", params.all_models ? "yes" : "no");
+    if (!params.all_models && Array.isArray(params.model_codes) && params.model_codes.length) {
+      addRow("Model codes", params.model_codes.join(", "));
+    }
+  }
+
+  const summary = summarizeParams(run);
+  const pretty = JSON.stringify(params, null, 2);
+  const dl = rows.length
+    ? `<dl class="job-run-params-dl">${rows.join("")}</dl>`
+    : `<p class="job-run-params-empty muted">No parameters recorded.</p>`;
+
+  return `
+    <div class="job-run-detail-section">
+      <h4>Parameters</h4>
+      <p class="job-run-params-summary">${escapeHtml(summary)}</p>
+      ${dl}
+      <details class="job-run-params-raw">
+        <summary>Raw JSON</summary>
+        <pre>${escapeHtml(pretty)}</pre>
+      </details>
+    </div>
+  `;
+}
+
+function jobRunProgressData(run, liveProgress) {
+  const status = String(run.status || "unknown").toLowerCase();
+  const source = liveProgress || run.result || {};
+  let pct = null;
+
+  if (source.percent != null && Number.isFinite(Number(source.percent))) {
+    pct = Math.max(0, Math.min(100, Number(source.percent)));
+  } else if (run.job_type === "geocode" && Number(source.total) > 0) {
+    pct = Math.max(0, Math.min(100, (Number(source.processed || 0) / Number(source.total)) * 100));
+  } else if (run.job_type === "ingest" && Number(source.total_pages) > 0) {
+    pct = Math.max(
+      0,
+      Math.min(100, (Number(source.current_page || 0) / Number(source.total_pages)) * 100)
+    );
+  } else if (run.job_type === "ingest" && Number(source.total_models) > 0) {
+    const index = Number(source.model_index || 0);
+    pct = Math.max(0, Math.min(100, (index / Number(source.total_models)) * 100));
+  } else if (run.job_type === "dealer_vehicle_refresh" && Number(source.total_models) > 0) {
+    const index = Number(source.model_index || 0);
+    pct = Math.max(0, Math.min(100, (index / Number(source.total_models)) * 100));
+  } else if (run.job_type === "dealer_vehicle_refresh" && source.percent != null) {
+    pct = Math.max(0, Math.min(100, Number(source.percent)));
+  }
+
+  if (status === "completed") {
+    return { pct: 100, label: "100%", state: "complete", indeterminate: false };
+  }
+  if (status === "cancelled") {
+    return {
+      pct: pct ?? 0,
+      label: pct != null ? `${Math.round(pct)}%` : "Cancelled",
+      state: "cancelled",
+      indeterminate: false,
+    };
+  }
+  if (status === "failed") {
+    return {
+      pct: pct ?? 0,
+      label: pct != null ? `${Math.round(pct)}%` : "Failed",
+      state: "failed",
+      indeterminate: false,
+    };
+  }
+  if (status === "running") {
+    const indeterminate = pct == null;
+    return {
+      pct: indeterminate ? 0 : pct,
+      label: indeterminate ? "Running…" : `${Math.round(pct)}%`,
+      state: "running",
+      indeterminate,
+    };
+  }
+  return { pct: 0, label: "—", state: "idle", indeterminate: false };
+}
+
+function renderJobRunProgressBar(progress) {
+  const fillClass = [
+    "job-run-progress-mini-fill",
+    progress.state === "complete" ? "is-complete" : "",
+    progress.state === "failed" ? "is-failed" : "",
+    progress.state === "cancelled" ? "is-cancelled" : "",
+    progress.indeterminate ? "is-indeterminate" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const width = progress.indeterminate ? 40 : Math.max(0, Math.min(100, progress.pct || 0));
+  return `
+    <div class="job-run-progress-wrap" title="${escapeHtml(progress.label)}">
+      <div class="job-run-progress-mini" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.indeterminate ? 0 : Math.round(width)}">
+        <div class="${fillClass}" style="width: ${width}%"></div>
+      </div>
+      <span class="job-run-progress-label">${escapeHtml(progress.label)}</span>
+    </div>
+  `;
+}
+
+function buildLiveProgressMap(payload) {
+  const map = {};
+  const ingest = payload?.ingest || {};
+  if (ingest.job_run_id && ingest.status === "running") {
+    map[ingest.job_run_id] = ingest;
+  }
+  const geocode = payload?.geocode?.job || {};
+  if (geocode.job_run_id && geocode.status === "running") {
+    map[geocode.job_run_id] = geocode;
+  }
+  return map;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function summarizeResult(run) {
+  const result = run.result || {};
+  const error = run.error
+    ? `<div class="job-run-error">${escapeHtml(run.error)}</div>`
+    : "";
+  const logs = Array.isArray(result.logs) ? result.logs : [];
+  const logBlock = logs.length
+    ? `<details class="job-run-logs"><summary>${logs.length} log line(s)</summary><pre>${escapeHtml(logs.join("\n"))}</pre></details>`
+    : "";
+  if (run.job_type === "ingest") {
+    const parts = [];
+    if (result.vehicles_persisted != null) {
+      parts.push(`${Number(result.vehicles_persisted).toLocaleString()} saved`);
+    }
+    if (result.completed_models?.length != null) {
+      parts.push(`${result.completed_models.length} model(s)`);
+    }
+    const summary = parts.join(", ") || run.message || "—";
+    return `${error}${escapeHtml(summary)}${logBlock}`;
+  }
+  if (run.job_type === "geocode") {
+    const parts = [];
+    if (result.geocoded != null) parts.push(`${Number(result.geocoded).toLocaleString()} geocoded`);
+    if (result.failed != null && Number(result.failed) > 0) {
+      parts.push(`${Number(result.failed).toLocaleString()} failed`);
+    }
+    if (result.remaining != null) parts.push(`${Number(result.remaining).toLocaleString()} left`);
+    const summary = parts.join(", ") || run.message || "—";
+    return `${error}${escapeHtml(summary)}${logBlock}`;
+  }
+  if (run.job_type === "catalog_sync" && result.count != null) {
+    return `${error}${Number(result.count).toLocaleString()} model(s)${logBlock}`;
+  }
+  if (run.job_type === "dealer_sync") {
+    const parts = [];
+    if (result.count != null) parts.push(`${Number(result.count).toLocaleString()} dealer(s)`);
+    if (result.seed_zips != null) parts.push(`${Number(result.seed_zips).toLocaleString()} seed ZIPs`);
+    const summary = parts.join(", ") || run.message || "—";
+    return `${error}${escapeHtml(summary)}${logBlock}`;
+  }
+  if (run.job_type === "dealer_vehicle_refresh") {
+    const parts = [];
+    if (result.vehicles_persisted != null) {
+      parts.push(`${Number(result.vehicles_persisted).toLocaleString()} saved`);
+    }
+    if (result.completed_models?.length != null) {
+      parts.push(`${result.completed_models.length} model(s)`);
+    }
+    const summary = parts.join(", ") || run.message || "—";
+    return `${error}${escapeHtml(summary)}${logBlock}`;
+  }
+  return `${error}${escapeHtml(run.message || run.error || "—")}${logBlock}`;
+}
+
+function renderStatusBlock(container, title, status, lines) {
+  const statusClass = String(status || "unknown").toLowerCase();
+  container.innerHTML = `
+    <div class="admin-status-row">
+      <span class="job-run-status ${statusClass}">${status || "unknown"}</span>
+      <strong>${title}</strong>
+    </div>
+    <ul class="admin-status-lines">
+      ${lines.map((line) => `<li>${line}</li>`).join("")}
+    </ul>
+  `;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+let catalogModels = [];
+let adminPollTimer = null;
+let adminPollInFlight = false;
+let lastIngestStatus = "idle";
+let lastJobRuns = [];
+let lastLiveProgressMap = {};
+const expandedJobRunIds = new Set();
+const POLL_IDLE_MS = 15000;
+const POLL_ACTIVE_MS = 5000;
+const POLL_HIDDEN_MS = 60000;
+const ingestUiState = {
+  running: false,
+  selectedModelCodes: new Set(),
+};
+
+function setIngestPanelLoading(active) {
+  const overlay = qs("ingest-loading");
+  const panel = qs("ingest-panel");
+  if (overlay) {
+    overlay.classList.toggle("hidden", !active);
+    overlay.setAttribute("aria-hidden", active ? "false" : "true");
+  }
+  if (panel) {
+    panel.classList.toggle("is-loading", active);
+  }
+}
+
+function getIngestSettingsPayload() {
+  const defaults = window.VIT?.getIngestDefaults?.(window.VIT?.currentMake) || {
+    zip: "95132",
+    distance: 500,
+    pageSize: 250,
+  };
+  return {
+    zip_code: qs("ingest-zip-code")?.value?.trim() || defaults.zip,
+    distance: Number(qs("ingest-distance")?.value || defaults.distance),
+    page_size: defaults.pageSize,
+    nationwide: defaults.nationwide !== false,
+  };
+}
+
+function applyMakeUi() {
+  const info = window.VIT?.currentMakeInfo;
+  if (!info) return;
+
+  const title = qs("admin-ingest-title");
+  if (title) {
+    title.textContent = `Refresh ${info.display_name} inventory`;
+  }
+
+  const subtitle = qs("admin-ingest-subtitle");
+  if (subtitle) {
+    subtitle.textContent =
+      info.slug === "mazda"
+        ? "Sync dealers nationwide, then refresh inventory by model or per dealer ZIP (1 mi radius)."
+        : info.supports_catalog_sync
+          ? "Sync the model catalog, then ingest selected models or the full catalog."
+          : "Run ingest to refresh inventory for this make.";
+  }
+
+  const defaults = window.VIT.getIngestDefaults(info.slug);
+  const zipEl = qs("ingest-zip-code");
+  const distEl = qs("ingest-distance");
+  if (zipEl && !zipEl.value) zipEl.value = defaults.zip;
+  if (distEl && !distEl.value) distEl.value = String(defaults.distance);
+
+  const showCatalogSync = Boolean(info.supports_catalog_sync);
+  const showModelSelection = Boolean(info.requires_model_selection);
+  for (const id of [
+    "ingest-refresh-catalog-btn",
+    "catalog-select-all-btn",
+    "catalog-select-missing-btn",
+    "catalog-select-none-btn",
+    "catalog-selection-count",
+  ]) {
+    qs(id)?.classList.toggle("hidden", !showCatalogSync);
+  }
+  qs("ingest-selected-btn")?.classList.toggle("hidden", !showModelSelection);
+  qs("ingest-sync-dealers-btn")?.classList.toggle("hidden", info.slug !== "mazda");
+  qs("ingest-dealer-refresh-selected-btn")?.classList.toggle("hidden", info.slug !== "mazda");
+  qs("ingest-dealer-refresh-all-btn")?.classList.toggle("hidden", info.slug !== "mazda");
+  if (!showCatalogSync) {
+    qs("ingest-all-btn")?.classList.remove("hidden");
+  }
+}
+
+function emptyCatalogMessage() {
+  const info = window.VIT?.currentMakeInfo;
+  if (info?.supports_catalog_sync) {
+    return 'No model catalog in the database yet. Click “Sync Model Catalog” to fetch available models.';
+  }
+  return "No models in the database yet. Run ingest to populate inventory.";
+}
+
+function updateCatalogSelectionUi() {
+  const count = ingestUiState.selectedModelCodes.size;
+  const countEl = qs("catalog-selection-count");
+  if (countEl) {
+    countEl.textContent =
+      count === 1 ? "1 model selected" : `${count.toLocaleString()} models selected`;
+  }
+  const selectedBtn = qs("ingest-selected-btn");
+  if (selectedBtn && !ingestUiState.running) {
+    selectedBtn.disabled = count === 0;
+  }
+  const dealerRefreshSelectedBtn = qs("ingest-dealer-refresh-selected-btn");
+  if (dealerRefreshSelectedBtn && !ingestUiState.running) {
+    dealerRefreshSelectedBtn.disabled = count === 0;
+  }
+}
+
+function catalogModelHasNoData(model) {
+  return Number(model.active_vehicle_count || 0) === 0;
+}
+
+function selectAllCatalogModels() {
+  ingestUiState.selectedModelCodes = new Set(catalogModels.map((model) => model.model_code));
+  renderCatalogModels();
+}
+
+function selectMissingDataCatalogModels() {
+  ingestUiState.selectedModelCodes = new Set(
+    catalogModels.filter(catalogModelHasNoData).map((model) => model.model_code)
+  );
+  renderCatalogModels();
+}
+
+function selectNoneCatalogModels() {
+  ingestUiState.selectedModelCodes.clear();
+  renderCatalogModels();
+}
+
+function formatCatalogInventoryCount(count) {
+  const value = Number(count || 0);
+  if (value === 0) {
+    return "No cars in database";
+  }
+  return `${value.toLocaleString()} ${value === 1 ? "car" : "cars"} in database`;
+}
+
+function sortCatalogModelsForDisplay(models) {
+  return [...models].sort((a, b) => {
+    const aCount = Number(a.active_vehicle_count || 0);
+    const bCount = Number(b.active_vehicle_count || 0);
+    if (aCount === 0 && bCount > 0) return -1;
+    if (bCount === 0 && aCount > 0) return 1;
+    if (aCount !== bCount) return aCount - bCount;
+    const aTitle = String(a.title || a.series || a.model_code || "");
+    const bTitle = String(b.title || b.series || b.model_code || "");
+    return aTitle.localeCompare(bTitle);
+  });
+}
+
+function renderCatalogModels() {
+  const container = qs("catalog-model-list");
+  if (!container) return;
+
+  if (!catalogModels.length) {
+    container.innerHTML = `<div class="muted">${escapeHtml(emptyCatalogMessage())}</div>`;
+    return;
+  }
+
+  container.innerHTML = sortCatalogModelsForDisplay(catalogModels)
+    .map((model) => {
+      const code = model.model_code;
+      const selected = ingestUiState.selectedModelCodes.has(code);
+      const title = escapeHtml(model.title || model.series || code);
+      const inventoryCount = Number(model.active_vehicle_count || 0);
+      const hasNoData = catalogModelHasNoData(model);
+      const meta = [
+        model.year ? `${model.year}` : "",
+        model.msrp ? `$${Number(model.msrp).toLocaleString()} MSRP` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const image = model.image
+        ? (window.VIT?.cachedImgTag ? VIT.cachedImgTag(model.image, title) : `<img src="${escapeHtml(model.image)}" alt="" loading="lazy" />`)
+        : '<div class="catalog-model-thumb catalog-model-thumb-empty"><span>No image</span></div>';
+      const alert = hasNoData
+        ? '<span class="catalog-model-alert" title="No inventory in database">⚠</span>'
+        : "";
+      return `
+        <label class="catalog-model-item ${selected ? "selected" : ""} ${hasNoData ? "no-data" : ""}" data-model-code="${escapeHtml(code)}">
+          <input type="checkbox" ${selected ? "checked" : ""} data-model-code="${escapeHtml(code)}" />
+          ${image}
+          <div class="catalog-model-copy">
+            <div class="catalog-model-title-row">
+              <strong>${title}</strong>
+              ${alert}
+            </div>
+            <span>${escapeHtml(code)}</span>
+            <span class="catalog-model-count ${hasNoData ? "is-empty" : ""}">${escapeHtml(formatCatalogInventoryCount(inventoryCount))}</span>
+            ${meta ? `<span class="catalog-model-meta">${escapeHtml(meta)}</span>` : ""}
+          </div>
+        </label>
+      `;
+    })
+    .join("");
+
+  container.querySelectorAll(".catalog-model-item").forEach((item) => {
+    item.addEventListener("click", (event) => {
+      if (event.target instanceof HTMLInputElement) return;
+      const checkbox = item.querySelector('input[type="checkbox"]');
+      if (!checkbox) return;
+      checkbox.checked = !checkbox.checked;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  });
+
+  container.querySelectorAll('input[type="checkbox"][data-model-code]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const code = checkbox.getAttribute("data-model-code");
+      if (!code) return;
+      if (checkbox.checked) {
+        ingestUiState.selectedModelCodes.add(code);
+      } else {
+        ingestUiState.selectedModelCodes.delete(code);
+      }
+      const label = checkbox.closest(".catalog-model-item");
+      if (label) {
+        label.classList.toggle("selected", checkbox.checked);
+      }
+      updateCatalogSelectionUi();
+    });
+  });
+
+  updateCatalogSelectionUi();
+  if (window.VIT?.hydrateImages) {
+    VIT.hydrateImages(container);
+  }
+  if (window.VIT?.primeImageUrls) {
+    VIT.primeImageUrls(catalogModels.map((model) => model.image).filter(Boolean));
+  }
+}
+
+async function loadCatalogModels() {
+  setIngestPanelLoading(true);
+  try {
+    const data = await fetchJson("/api/catalog/models");
+    catalogModels = data.models || [];
+    renderCatalogModels();
+  } finally {
+    setIngestPanelLoading(false);
+  }
+}
+
+function setIngestUiRunning(running) {
+  ingestUiState.running = running;
+  for (const id of [
+    "ingest-refresh-catalog-btn",
+    "ingest-sync-dealers-btn",
+    "ingest-selected-btn",
+    "ingest-all-btn",
+    "ingest-dealer-refresh-selected-btn",
+    "ingest-dealer-refresh-all-btn",
+    "catalog-select-all-btn",
+    "catalog-select-missing-btn",
+    "catalog-select-none-btn",
+  ]) {
+    const btn = qs(id);
+    if (!btn) continue;
+    if (id === "ingest-selected-btn" || id === "ingest-dealer-refresh-selected-btn") {
+      btn.disabled = running || ingestUiState.selectedModelCodes.size === 0;
+    } else {
+      btn.disabled = running;
+    }
+  }
+}
+
+function renderIngestProgress(status) {
+  const wrap = qs("ingest-progress-wrap");
+  const label = qs("ingest-progress-label");
+  const percent = qs("ingest-progress-percent");
+  const bar = qs("ingest-progress-bar");
+  const detail = qs("ingest-progress-detail");
+  if (!wrap || !label || !percent || !bar || !detail) return;
+
+  const isActive = status.status === "running";
+  wrap.classList.toggle(
+    "hidden",
+    !isActive && status.status !== "failed" && status.status !== "completed"
+  );
+
+  const pct = Math.max(0, Math.min(100, Number(status.percent || 0)));
+  label.textContent = status.message || status.status || "Idle";
+  percent.textContent = `${pct.toFixed(0)}%`;
+  bar.value = pct;
+
+  const parts = [];
+  if (status.current_model_title || status.current_model) {
+    const isDealerZipRefresh = /^\d{5}$/.test(String(status.current_model || ""));
+    if (isDealerZipRefresh) {
+      parts.push(
+        `ZIP ${status.current_model} (${status.model_index || 0}/${status.total_models || 0})`
+      );
+      if (status.current_model_title) {
+        parts.push(String(status.current_model_title));
+      }
+    } else {
+      parts.push(
+        `Model ${status.model_index || 0}/${status.total_models || 0}: ${status.current_model_title || status.current_model}`
+      );
+    }
+  }
+  if (status.total_pages) {
+    parts.push(`Page ${status.current_page || 0}/${status.total_pages}`);
+  }
+  if (status.vehicles_fetched) {
+    parts.push(`${Number(status.vehicles_fetched).toLocaleString()} vehicles fetched`);
+  }
+  if (status.vehicles_persisted) {
+    parts.push(`${Number(status.vehicles_persisted).toLocaleString()} saved to database`);
+  }
+  if (status.completed_models?.length) {
+    parts.push(`${status.completed_models.length} model(s) done`);
+  }
+  if (status.error) {
+    parts.push(`Error: ${status.error}`);
+  }
+  detail.textContent = parts.join(" · ");
+
+  if (status.status === "failed") {
+    label.textContent = status.error ? `Failed: ${status.error}` : "Ingest failed";
+  }
+
+  renderIngestLogs(status);
+}
+
+function renderIngestLogs(status) {
+  const panel = qs("ingest-log-panel");
+  const output = qs("ingest-log-output");
+  if (!panel || !output) return;
+
+  const logs = Array.isArray(status.logs) ? status.logs : [];
+  const show =
+    logs.length > 0 ||
+    status.status === "running" ||
+    status.status === "failed" ||
+    status.status === "completed";
+  panel.classList.toggle("hidden", !show);
+
+  const text = logs.length ? logs.join("\n") : status.message || "";
+  const stickToBottom =
+    output.scrollHeight - output.clientHeight - output.scrollTop < 48;
+  output.textContent = text;
+  if (stickToBottom || status.status === "running") {
+    output.scrollTop = output.scrollHeight;
+  }
+}
+
+function isAdminJobActive(payload) {
+  if (typeof payload?.jobs_active === "boolean") {
+    return payload.jobs_active;
+  }
+  const ingestStatus = payload?.ingest?.status;
+  const geocodeStatus = payload?.geocode?.job?.status;
+  return ingestStatus === "running" || geocodeStatus === "running";
+}
+
+function scheduleAdminPoll(delayMs) {
+  if (adminPollTimer !== null) {
+    clearTimeout(adminPollTimer);
+  }
+  const interval = document.hidden ? POLL_HIDDEN_MS : delayMs;
+  adminPollTimer = window.setTimeout(() => {
+    adminPollTimer = null;
+    pollAdminState().catch((err) => console.error(err));
+  }, interval);
+}
+
+async function pollAdminState() {
+  if (adminPollInFlight) {
+    return;
+  }
+  adminPollInFlight = true;
+  try {
+    const payload = await fetchJson("/api/admin/overview");
+    const ingest = payload.ingest || {};
+    const previousIngestStatus = lastIngestStatus;
+    lastIngestStatus = ingest.status || "idle";
+
+    renderOverview(payload);
+
+    if (previousIngestStatus === "running" && lastIngestStatus === "completed") {
+      await loadCatalogModels();
+    }
+
+    setIngestUiRunning(ingest.status === "running");
+    scheduleAdminPoll(isAdminJobActive(payload) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+  } catch (err) {
+    console.error(err);
+    scheduleAdminPoll(POLL_IDLE_MS);
+  } finally {
+    adminPollInFlight = false;
+  }
+}
+
+async function syncNationwideDealers() {
+  setIngestUiRunning(true);
+  const syncBtn = qs("ingest-sync-dealers-btn");
+  const originalText = syncBtn?.textContent || "Sync Dealers (Nationwide)";
+  if (syncBtn) syncBtn.textContent = "Syncing dealers...";
+  try {
+    await fetchJson("/api/dealers/sync", { method: "POST", body: "{}" });
+    await pollAdminState();
+  } finally {
+    if (syncBtn) syncBtn.textContent = originalText;
+    setIngestUiRunning(false);
+  }
+}
+
+async function syncModelCatalog() {
+  setIngestUiRunning(true);
+  const syncBtn = qs("ingest-refresh-catalog-btn");
+  const originalText = syncBtn?.textContent || "Sync Model Catalog";
+  if (syncBtn) syncBtn.textContent = "Syncing catalog...";
+  try {
+    await fetchJson("/api/catalog/sync", {
+      method: "POST",
+      body: JSON.stringify(getIngestSettingsPayload()),
+    });
+    await loadCatalogModels();
+    await pollAdminState();
+  } finally {
+    if (syncBtn) syncBtn.textContent = originalText;
+    setIngestUiRunning(false);
+  }
+}
+
+async function startDealerVehicleRefresh({ allModels = false } = {}) {
+  const payload = getIngestSettingsPayload();
+  payload.all_models = allModels;
+  payload.distance = 1;
+  if (!allModels) {
+    payload.model_codes = Array.from(ingestUiState.selectedModelCodes);
+    if (!payload.model_codes.length) {
+      return;
+    }
+  }
+
+  setIngestUiRunning(true);
+  qs("ingest-progress-wrap")?.classList.remove("hidden");
+  renderIngestProgress({
+    status: "running",
+    message: "Starting dealer ZIP vehicle refresh...",
+    percent: 0,
+  });
+
+  await fetchJson("/api/dealers/refresh-vehicles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  scheduleAdminPoll(POLL_ACTIVE_MS);
+}
+
+async function startIngest({ allModels = false } = {}) {
+  const payload = getIngestSettingsPayload();
+  payload.all_models = allModels;
+  if (!allModels) {
+    payload.model_codes = Array.from(ingestUiState.selectedModelCodes);
+    if (!payload.model_codes.length) {
+      return;
+    }
+  }
+
+  setIngestUiRunning(true);
+  qs("ingest-progress-wrap")?.classList.remove("hidden");
+  renderIngestProgress({
+    status: "running",
+    message: "Starting ingest...",
+    percent: 0,
+  });
+
+  await fetchJson("/api/ingest/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  scheduleAdminPoll(POLL_ACTIVE_MS);
+}
+
+function setupIngestHandlers() {
+  qs("ingest-refresh-catalog-btn")?.addEventListener("click", () => {
+    syncModelCatalog().catch((err) => alert(err.message));
+  });
+  qs("ingest-sync-dealers-btn")?.addEventListener("click", () => {
+    syncNationwideDealers().catch((err) => alert(err.message));
+  });
+  qs("catalog-select-all-btn")?.addEventListener("click", selectAllCatalogModels);
+  qs("catalog-select-missing-btn")?.addEventListener("click", selectMissingDataCatalogModels);
+  qs("catalog-select-none-btn")?.addEventListener("click", selectNoneCatalogModels);
+  qs("ingest-selected-btn")?.addEventListener("click", () => {
+    if (ingestUiState.selectedModelCodes.size === 0) return;
+    startIngest({ allModels: false }).catch((err) => alert(err.message));
+  });
+  qs("ingest-all-btn")?.addEventListener("click", () => {
+    startIngest({ allModels: true }).catch((err) => alert(err.message));
+  });
+  qs("ingest-dealer-refresh-selected-btn")?.addEventListener("click", () => {
+    if (ingestUiState.selectedModelCodes.size === 0) return;
+    startDealerVehicleRefresh({ allModels: false }).catch((err) => alert(err.message));
+  });
+  qs("ingest-dealer-refresh-all-btn")?.addEventListener("click", () => {
+    startDealerVehicleRefresh({ allModels: true }).catch((err) => alert(err.message));
+  });
+}
+
+function renderOverview(payload) {
+  const ingest = payload.ingest || {};
+  renderIngestProgress(ingest);
+  if (ingest.status === "running") {
+    setIngestUiRunning(true);
+  }
+
+  const geocode = payload.geocode?.job || {};
+  const geoStats = payload.geocode || {};
+  renderStatusBlock(qs("admin-geocode-status"), "Dealer geocoding", geocode.status, [
+    geocode.message || geoStats.remaining != null
+      ? `${Number(geoStats.remaining || 0).toLocaleString()} dealer(s) remaining`
+      : "No message",
+    geoStats.geocoded != null && geoStats.dealers_in_inventory != null
+      ? `${Number(geoStats.geocoded).toLocaleString()}/${Number(geoStats.dealers_in_inventory).toLocaleString()} geocoded overall`
+      : null,
+    geocode.processed > 0 && geocode.total > 0
+      ? `${Number(geocode.processed).toLocaleString()}/${Number(geocode.total).toLocaleString()} processed this run`
+      : null,
+    geocode.current_dealer_cd ? `Current: ${geocode.current_dealer_cd}` : null,
+    geocode.error ? `Error: ${geocode.error}` : null,
+  ].filter(Boolean));
+
+  const startBtn = qs("admin-geocode-start-btn");
+  const cancelBtn = qs("admin-geocode-cancel-btn");
+  const geocodeRunning = geocode.status === "running";
+  const ingestRunning = ingest.status === "running";
+  if (startBtn) {
+    startBtn.disabled = geocodeRunning;
+    startBtn.title = geocodeRunning ? "A geocode job is already running." : "";
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = !geocodeRunning;
+  }
+  if (startBtn) {
+    startBtn.title = ingestRunning
+      ? "Ingest is running; geocode may auto-start when ingest completes."
+      : startBtn.title;
+  }
+
+  renderJobSummary(payload.summary || {});
+  lastJobRuns = payload.recent_runs || [];
+  lastLiveProgressMap = buildLiveProgressMap(payload);
+  renderJobRuns(lastJobRuns, lastLiveProgressMap);
+  const updated = qs("admin-last-updated");
+  if (updated) {
+    updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+function renderJobSummary(summary) {
+  const container = qs("admin-job-summary");
+  if (!container) return;
+  const entries = Object.entries(summary);
+  if (!entries.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = entries
+    .map(([jobType, stats]) => {
+      const avg =
+        stats.avg_duration_sec != null ? formatDurationSec(stats.avg_duration_sec) : "—";
+      return `<span class="job-runs-summary-chip"><strong>${formatJobType(jobType)}</strong>: ${stats.count} run(s), avg ${avg}</span>`;
+    })
+    .join("");
+}
+
+function bindJobRunExpandHandlers() {
+  const tbody = qs("admin-job-runs-tbody");
+  if (!tbody) return;
+  tbody.querySelectorAll(".job-run-expand-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const id = Number(btn.dataset.jobRunId);
+      if (!Number.isFinite(id)) return;
+      if (expandedJobRunIds.has(id)) {
+        expandedJobRunIds.delete(id);
+      } else {
+        expandedJobRunIds.add(id);
+      }
+      renderJobRuns(lastJobRuns, lastLiveProgressMap);
+    });
+  });
+}
+
+function renderJobRuns(runs, liveProgressMap = {}) {
+  const tbody = qs("admin-job-runs-tbody");
+  if (!tbody) return;
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="job-runs-empty">No job runs yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs
+    .flatMap((run) => {
+      const statusClass = String(run.status || "unknown").toLowerCase();
+      const id = run.job_run_id;
+      const expanded = expandedJobRunIds.has(id);
+      const progress = jobRunProgressData(run, liveProgressMap[id]);
+      const expandLabel = expanded ? "Collapse job details" : "Expand job details";
+      const mainRow = `
+        <tr class="job-run-row ${expanded ? "is-expanded" : ""}" data-job-run-id="${id}">
+          <td class="job-run-id-cell">
+            <button
+              type="button"
+              class="job-run-expand-btn"
+              data-job-run-id="${id}"
+              aria-expanded="${expanded ? "true" : "false"}"
+              aria-label="${expandLabel}"
+              title="${expandLabel}"
+            >${expanded ? "▾" : "▸"}</button>
+            ${id}
+          </td>
+          <td>${formatJobType(run.job_type)}</td>
+          <td><span class="job-run-status ${statusClass}">${run.status || "unknown"}</span></td>
+          <td>${renderJobRunProgressBar(progress)}</td>
+          <td>${formatStartedAt(run.started_at)}</td>
+          <td>${formatDurationSec(run.duration_sec)}</td>
+          <td>${run.trigger_source || "—"}</td>
+          <td>${summarizeResult(run)}</td>
+        </tr>
+      `;
+      if (!expanded) {
+        return [mainRow];
+      }
+      return [
+        mainRow,
+        `
+        <tr class="job-run-detail-row" data-job-run-id="${id}">
+          <td colspan="8">
+            <div class="job-run-detail-panel">
+              ${formatParamsDetail(run)}
+            </div>
+          </td>
+        </tr>
+      `,
+      ];
+    })
+    .join("");
+  bindJobRunExpandHandlers();
+}
+
+async function refreshOverview() {
+  const payload = await fetchJson("/api/admin/overview");
+  renderOverview(payload);
+}
+
+async function startGeocodeJob() {
+  const btn = qs("admin-geocode-start-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await fetchJson("/api/admin/geocode/start", { method: "POST", body: "{}" });
+    await refreshOverview();
+  } catch (err) {
+    alert(err.message || "Failed to start geocode job.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function cancelGeocodeJob() {
+  const btn = qs("admin-geocode-cancel-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await fetchJson("/api/admin/geocode/cancel", { method: "POST", body: "{}" });
+    await refreshOverview();
+  } catch (err) {
+    alert(err.message || "Failed to cancel geocode job.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function setupAdmin() {
+  if (window.VIT?.initMakeSwitcher) {
+    try {
+      await window.VIT.initMakeSwitcher("make-select");
+      applyMakeUi();
+    } catch (err) {
+      console.warn("[make]", err);
+    }
+  }
+  setupIngestHandlers();
+  qs("admin-geocode-start-btn")?.addEventListener("click", () => {
+    startGeocodeJob().catch((err) => console.error(err));
+  });
+  qs("admin-geocode-cancel-btn")?.addEventListener("click", () => {
+    cancelGeocodeJob().catch((err) => console.error(err));
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      scheduleAdminPoll(POLL_IDLE_MS);
+    }
+  });
+
+  try {
+    await loadCatalogModels();
+    await pollAdminState();
+  } catch (err) {
+    console.error(err);
+    alert(err.message || "Failed to load admin page.");
+  }
+}
+
+window.addEventListener("load", () => {
+  setupAdmin().catch((err) => console.error(err));
+});

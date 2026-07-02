@@ -1,0 +1,38 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Local databases & data dirs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+mysql_data/
+
+# Ingest archives & local samples
+archives/
+samples/
+
+# Logs & OS
+*.log
+.DS_Store
+
+# Editor / IDE (local only)
+.idea/
+.vscode/
+*.swp
+*~

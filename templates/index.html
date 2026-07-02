@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ app_title | default('Vehicle Inventory Tracker') }}</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260702p" />
+  </head>
+  <body data-make="{{ make_slug | default('toyota') }}">
+    <main>
+      <header>
+        <div class="header-title-row">
+          <h1>{{ app_title | default('Vehicle Inventory Tracker') }}</h1>
+          <div class="admin-header-actions">
+            <label class="make-switcher">
+              Make
+              <select id="make-select" aria-label="Vehicle make"></select>
+            </label>
+            <a href="/admin" class="admin-link">Admin</a>
+          </div>
+        </div>
+        <p class="header-subtitle">Viewing <strong data-make-label>{{ make_name | default('vehicle') }}</strong> inventory</p>
+      </header>
+
+      <section class="summary" id="summary">
+        <div class="card"><strong>Latest Run</strong><span id="latest-run">-</span></div>
+        <div class="card"><strong>Queried At</strong><span id="latest-time">-</span></div>
+        <div class="card"><strong>Active Vehicles</strong><span id="active-count">-</span></div>
+        <div class="card"><strong>Total Vehicles</strong><span id="total-count">-</span></div>
+      </section>
+
+      <section class="filters">
+        <div id="filters-loading" class="loading-overlay hidden" aria-hidden="true">
+          <div class="loading-spinner-wrap" role="status" aria-live="polite">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <span>Loading filters…</span>
+          </div>
+        </div>
+        <label id="series-wrap">
+          Series
+          <div id="series-selected-pills" class="filter-pills hidden"></div>
+          <input id="series-search" type="text" placeholder="Type to search series..." autocomplete="off" />
+          <div id="series-filter-meta" class="series-filter-meta"></div>
+          <div id="series-values" class="series-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click series to filter. Search narrows the list.</small>
+        </label>
+        <label>
+          VIN Search
+          <input id="vin-query" type="text" placeholder="e.g. JTM7ERAV" />
+        </label>
+        <label>
+          Stock # Search
+          <input id="stock-query" type="text" placeholder="dealer stock number" />
+        </label>
+        <label id="dealer-wrap">
+          Dealership
+          <div id="dealer-selected-pills" class="filter-pills hidden"></div>
+          <input id="dealer-search" type="text" placeholder="Type to search dealers..." autocomplete="off" />
+          <div id="dealer-filter-meta" class="dealer-filter-meta"></div>
+          <div id="dealer-values" class="dealer-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click dealers to filter. Search narrows the list.</small>
+        </label>
+        <label>
+          Search ZIP
+          <input id="search-zip-code" type="text" value="" maxlength="10" inputmode="numeric" placeholder="e.g. 95132" />
+          <small>Distance radius is measured from this ZIP using geocoded dealer locations.</small>
+        </label>
+        <label>
+          Max Distance (mi)
+          <input id="distance-max-miles" type="number" min="1" max="5000" value="" placeholder="50" />
+          <small>Limits inventory to dealers within this radius of the search ZIP.</small>
+        </label>
+        <label>
+          State (multi-select)
+          <div id="state-selected-pills" class="filter-pills hidden"></div>
+          <div id="state-filter-meta" class="series-filter-meta"></div>
+          <div id="state-codes" class="series-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Dealer state from geocoded cache. Click states to filter.</small>
+        </label>
+        <label id="model-wrap">
+          Models (multi-select)
+          <div id="model-selected-pills" class="filter-pills hidden"></div>
+          <div id="model-values" class="series-filter-list facet-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click models to filter.</small>
+        </label>
+        <label>
+          Exterior Colors (multi-select)
+          <div id="exterior-color-selected-pills" class="filter-pills hidden"></div>
+          <div id="exterior-color-values" class="color-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click items to toggle.</small>
+        </label>
+        <label>
+          Interior Colors (multi-select)
+          <div id="interior-color-selected-pills" class="filter-pills hidden"></div>
+          <div id="interior-color-values" class="color-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click items to toggle.</small>
+        </label>
+        <label>
+          Drivetrain (multi-select)
+          <div id="drivetrain-selected-pills" class="filter-pills hidden"></div>
+          <div id="drivetrain-codes" class="series-filter-list facet-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click drivetrains to filter.</small>
+        </label>
+        <label>
+          Stage (multi-select)
+          <div id="stage-selected-pills" class="filter-pills hidden"></div>
+          <div id="stage-codes" class="series-filter-list facet-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click stages to filter.</small>
+        </label>
+        <label>
+          Must Include Options (multi-select)
+          <div id="option-selected-pills" class="filter-pills hidden"></div>
+          <div id="option-codes" class="series-filter-list facet-filter-list" role="listbox" aria-multiselectable="true"></div>
+          <small>Click options to filter.</small>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="active-only" checked />
+          Active Only
+        </label>
+        <div class="actions">
+          <button id="refresh-btn">Apply Filters</button>
+          <button id="export-csv-btn" type="button">Export CSV</button>
+          <button id="clear-btn">Clear</button>
+        </div>
+        <div id="filter-context-meta" class="filter-context-meta"></div>
+      </section>
+
+      <section class="table-wrap">
+        <h2 id="result-title">Results</h2>
+        <div id="location-filter-meta" class="city-filter-meta"></div>
+        <div id="analytics-panel" class="analytics-panel">
+          <div id="analytics-loading" class="loading-overlay hidden" aria-hidden="true">
+            <div class="loading-spinner-wrap" role="status" aria-live="polite">
+              <div class="loading-spinner" aria-hidden="true"></div>
+              <span>Loading analytics…</span>
+            </div>
+          </div>
+          <div id="selection-stats" class="selection-stats"></div>
+          <div id="inventory-geo-map" class="inventory-geo-analytics"></div>
+          <div id="price-distribution" class="price-distribution"></div>
+          <div id="pricing-insights" class="pricing-insights"></div>
+        </div>
+        <div id="pagination-controls" class="pagination-controls"></div>
+        <div class="inventory-table-wrap">
+          <div class="inventory-table-scroll">
+            <div id="table-loading" class="loading-overlay hidden" aria-hidden="true">
+              <div class="loading-spinner-wrap" role="status" aria-live="polite">
+                <div class="loading-spinner" aria-hidden="true"></div>
+                <span>Loading inventory…</span>
+              </div>
+            </div>
+            <table class="inventory-table">
+              <colgroup></colgroup>
+              <thead>
+                <tr></tr>
+              </thead>
+              <tbody id="results-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside id="vehicle-detail" class="detail-panel hidden" aria-hidden="true">
+      <div class="detail-header">
+        <h3 id="detail-title">Vehicle Details</h3>
+        <div class="detail-header-actions">
+          <button id="detail-export-pdf" type="button" class="detail-no-print">Download PDF</button>
+          <button id="detail-close" type="button" class="detail-no-print">Close</button>
+        </div>
+      </div>
+      <div class="detail-meta" id="detail-meta"></div>
+
+      <section class="detail-section">
+        <h4>Latest Status</h4>
+        <div id="detail-latest"></div>
+      </section>
+
+      <section class="detail-section detail-no-print">
+        <h4>Options</h4>
+        <ul id="detail-options" class="detail-list"></ul>
+      </section>
+
+      <section class="detail-section detail-no-print">
+        <h4>Media</h4>
+        <div id="detail-media" class="media-grid"></div>
+      </section>
+
+      <section class="detail-section">
+        <h4>Price History</h4>
+        <div class="history-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Date</th>
+                <th>Advertised</th>
+                <th>MSRP</th>
+                <th>vs MSRP</th>
+                <th>Base MSRP</th>
+                <th>Selling</th>
+              </tr>
+            </thead>
+            <tbody id="detail-price-history"></tbody>
+          </table>
+        </div>
+      </section>
+    </aside>
+    <div id="detail-backdrop" class="detail-backdrop hidden"></div>
+    <div id="image-lightbox" class="image-lightbox hidden" aria-hidden="true">
+      <div id="image-lightbox-backdrop" class="image-lightbox-backdrop"></div>
+      <div class="image-lightbox-content" role="dialog" aria-modal="true" aria-labelledby="image-lightbox-title">
+        <div class="image-lightbox-toolbar">
+          <span id="image-lightbox-title"></span>
+          <div class="image-lightbox-actions">
+            <button id="image-lightbox-open-tab" type="button">Open in new tab</button>
+            <button id="image-lightbox-close" type="button">Close</button>
+          </div>
+        </div>
+        <button id="image-lightbox-image-wrap" type="button" class="image-lightbox-image-wrap" title="Click image to open in new tab">
+          <img id="image-lightbox-image" alt="" />
+        </button>
+        <p class="image-lightbox-hint">Click the image to open the original in a new tab.</p>
+      </div>
+    </div>
+    <div id="pano-lightbox" class="pano-lightbox hidden" aria-hidden="true">
+      <div id="pano-lightbox-backdrop" class="pano-lightbox-backdrop"></div>
+      <div class="pano-lightbox-content" role="dialog" aria-modal="true" aria-labelledby="pano-lightbox-title">
+        <div class="pano-lightbox-toolbar">
+          <span id="pano-lightbox-title">360° View</span>
+          <div class="pano-lightbox-actions">
+            <button id="pano-lightbox-open-tab" type="button">Open source</button>
+            <button id="pano-lightbox-close" type="button">Close</button>
+          </div>
+        </div>
+        <div id="pano-viewer-root" class="pano-viewer-root pano-viewer-root-modal"></div>
+        <p class="pano-lightbox-hint">Drag to look around · Scroll or pinch to zoom · Esc to close</p>
+      </div>
+    </div>
+    <link rel="stylesheet" href="/static/vendor/pannellum.css?v=20260702p" />
+    <script src="/static/vit-common.js?v=20260702filters1"></script>
+    <script src="/static/geo-map.js?v=20260702z"></script>
+    <script src="/static/image-cache.js?v=20260702p"></script>
+    <script src="/static/vendor/pannellum.js?v=20260702p"></script>
+    <script src="/static/pano-viewer.js?v=20260702p"></script>
+    <script src="/static/app.js?v=20260702filters1"></script>
+  </body>
+</html>
