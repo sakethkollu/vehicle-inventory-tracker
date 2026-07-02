@@ -65,3 +65,18 @@ def test_append_run_location_filters_falls_back_to_oem_distance_when_zip_geocode
 
     assert where == ["vr.distance IS NOT NULL AND vr.distance <= ?"]
     assert params == [10]
+
+
+def test_dealer_display_distance_sql_prefers_oem_distance():
+    from vehicle_inventory.geo.dealer_geo import (
+        dealer_display_distance_sql,
+        normalize_dealer_display_distance,
+    )
+
+    expr = "3959.0 * acos(...)"
+    sql = dealer_display_distance_sql(expr)
+    assert "MIN(vr.distance)" in sql
+    assert "COALESCE(" in sql
+    assert sql.count(expr) == 1
+    assert normalize_dealer_display_distance(12.4) == 12.4
+    assert normalize_dealer_display_distance(5642.0) is None

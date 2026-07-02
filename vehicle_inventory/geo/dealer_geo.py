@@ -1472,28 +1472,35 @@ def _run_distance_bound_sql(vr_alias: str, op: str) -> str:
     return f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance {op} ?"
 
 
+MAX_DEALER_GEO_DISPLAY_MILES = 500
+
+
 def dealer_display_distance_sql(
     haversine_miles_expr: str,
     *,
     vr_alias: str = "vr",
 ) -> str:
-    """Best-effort dealer distance for facet labels (matches filter OR semantics)."""
+    """Prefer OEM ingest distance for labels; geocoded miles are fallback only."""
     return f"""
-        MIN(
-            CASE
-                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL
-                     AND {vr_alias}.distance IS NOT NULL THEN
-                    CASE
-                        WHEN ({haversine_miles_expr}) <= {vr_alias}.distance
-                        THEN ({haversine_miles_expr})
-                        ELSE {vr_alias}.distance
-                    END
-                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
-                    ({haversine_miles_expr})
-                ELSE {vr_alias}.distance
-            END
+        COALESCE(
+            MIN({vr_alias}.distance),
+            MIN(
+                CASE
+                    WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
+                        ({haversine_miles_expr})
+                END
+            )
         ) AS distance_miles
     """
+
+
+def normalize_dealer_display_distance(distance_miles: Optional[float]) -> Optional[float]:
+    if distance_miles is None:
+        return None
+    value = float(distance_miles)
+    if value > MAX_DEALER_GEO_DISPLAY_MILES:
+        return None
+    return round(value, 1)
 
 
 def _append_distance_max_filter(
