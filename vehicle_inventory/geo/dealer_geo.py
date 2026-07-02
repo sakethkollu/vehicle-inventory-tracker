@@ -1468,6 +1468,48 @@ def _haversine_miles_exists_sql(vr_alias: str) -> str:
     """
 
 
+def _run_distance_bound_sql(vr_alias: str, op: str) -> str:
+    return f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance {op} ?"
+
+
+def _append_distance_max_filter(
+    where: List[str],
+    params: List,
+    *,
+    vr_alias: str,
+    distance_max: int,
+    search_coords: Optional[Tuple[float, float]] = None,
+) -> None:
+    if search_coords:
+        lat, lng = search_coords
+        haversine = _haversine_miles_exists_sql(vr_alias).format(op="<=")
+        oem = _run_distance_bound_sql(vr_alias, "<=")
+        where.append(f"(({haversine}) OR ({oem}))")
+        params.extend([lat, lng, lat, int(distance_max), int(distance_max)])
+        return
+    where.append(_run_distance_bound_sql(vr_alias, "<="))
+    params.append(int(distance_max))
+
+
+def _append_distance_min_filter(
+    where: List[str],
+    params: List,
+    *,
+    vr_alias: str,
+    distance_min: int,
+    search_coords: Optional[Tuple[float, float]] = None,
+) -> None:
+    if search_coords:
+        lat, lng = search_coords
+        haversine = _haversine_miles_exists_sql(vr_alias).format(op=">=")
+        oem = _run_distance_bound_sql(vr_alias, ">=")
+        where.append(f"(({haversine}) OR ({oem}))")
+        params.extend([lat, lng, lat, int(distance_min), int(distance_min)])
+        return
+    where.append(_run_distance_bound_sql(vr_alias, ">="))
+    params.append(int(distance_min))
+
+
 def append_run_location_filters(
     where: List[str],
     params: List,
@@ -1486,26 +1528,43 @@ def append_run_location_filters(
         search_coords = geocode_postal_code(normalized_zip) if normalized_zip else None
 
         if normalized_zip:
-            if search_coords and (distance_max is not None or distance_min is not None):
-                lat, lng = search_coords
+            if distance_max is not None or distance_min is not None:
+                if search_coords is None:
+                    logger.warning(
+                        "Search ZIP %s could not be geocoded; using OEM distance only",
+                        normalized_zip,
+                    )
                 if distance_max is not None:
-                    where.append(_haversine_miles_exists_sql(vr_alias).format(op="<="))
-                    params.extend([lat, lng, lat, int(distance_max)])
+                    _append_distance_max_filter(
+                        where,
+                        params,
+                        vr_alias=vr_alias,
+                        distance_max=int(distance_max),
+                        search_coords=search_coords,
+                    )
                 if distance_min is not None:
-                    where.append(_haversine_miles_exists_sql(vr_alias).format(op=">="))
-                    params.extend([lat, lng, lat, int(distance_min)])
-            elif distance_max is not None or distance_min is not None:
-                logger.warning(
-                    "Search ZIP %s could not be geocoded; skipping distance filter",
-                    normalized_zip,
-                )
+                    _append_distance_min_filter(
+                        where,
+                        params,
+                        vr_alias=vr_alias,
+                        distance_min=int(distance_min),
+                        search_coords=search_coords,
+                    )
         elif distance_max is not None or distance_min is not None:
             if distance_max is not None:
-                where.append(f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance <= ?")
-                params.append(int(distance_max))
+                _append_distance_max_filter(
+                    where,
+                    params,
+                    vr_alias=vr_alias,
+                    distance_max=int(distance_max),
+                )
             if distance_min is not None:
-                where.append(f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance >= ?")
-                params.append(int(distance_min))
+                _append_distance_min_filter(
+                    where,
+                    params,
+                    vr_alias=vr_alias,
+                    distance_min=int(distance_min),
+                )
 
     if normalized_states:
         placeholders = ",".join("?" for _ in normalized_states)

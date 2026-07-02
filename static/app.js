@@ -3482,9 +3482,109 @@ function renderDetail(data) {
 }
 
 function pdfNormalizeMediaUrl(url) {
-  return String(url || "")
-    .trim()
-    .replace(/^https:\/\/www\.mazdausa\.com:443/i, "https://www.mazdausa.com");
+  return window.VitImageCache?.normalizeImageUrl?.(url) || String(url || "").trim();
+}
+
+function pdfWithTimeout(promise, timeoutMs, fallback) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function pdfBlobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function pdfConvertDataUrlToJpeg(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const timer = setTimeout(() => reject(new Error("Image decode timed out.")), 10000);
+    img.onload = () => {
+      clearTimeout(timer);
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, img.naturalWidth || 1);
+        canvas.height = Math.max(1, img.naturalHeight || 1);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas unavailable."));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL("image/jpeg", 0.92));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("Could not decode image."));
+    };
+    img.src = dataUrl;
+  });
+}
+
+async function pdfPrepareDataUrlForPdf(dataUrl) {
+  if (!dataUrl?.startsWith("data:")) {
+    return "";
+  }
+  const lower = dataUrl.slice(0, 32).toLowerCase();
+  if (lower.includes("image/webp") || lower.includes("image/avif")) {
+    try {
+      return await pdfConvertDataUrlToJpeg(dataUrl);
+    } catch {
+      return "";
+    }
+  }
+  return dataUrl;
+}
+
+async function pdfFetchDataUrl(url, timeoutMs = 20000) {
+  const href = pdfNormalizeMediaUrl(url);
+  if (!href) return "";
+  const cache = window.VitImageCache;
+
+  if (cache?.getDataUrl) {
+    const cached = await pdfWithTimeout(cache.getDataUrl(href), timeoutMs, "");
+    if (cached?.startsWith("data:")) {
+      return pdfPrepareDataUrlForPdf(cached);
+    }
+  }
+
+  const fetchUrl = cache?.toProxiedUrl?.(href) || href;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(fetchUrl, {
+      credentials: "omit",
+      cache: "force-cache",
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) {
+      return "";
+    }
+    const blob = await response.blob();
+    const dataUrl = await pdfBlobToDataUrl(blob);
+    return pdfPrepareDataUrlForPdf(dataUrl);
+  } catch {
+    return "";
+  }
+}
+
+async function pdfEnsureDataUrl(url) {
+  return pdfFetchDataUrl(url, 20000);
 }
 
 function is360MediaItem(item) {
@@ -3626,53 +3726,14 @@ function pdfMediaCaption(item) {
   return "View";
 }
 
-async function pdfEnsureDataUrl(url) {
-  const href = pdfNormalizeMediaUrl(url);
-  if (!href) return "";
-  const cache = window.VitImageCache;
-  if (!cache?.getDataUrl) return "";
-  let resolved = "";
-  try {
-    resolved = await cache.getDataUrl(href);
-  } catch {
-    resolved = "";
-  }
-  if (resolved?.startsWith("data:")) {
-    return resolved;
-  }
-  const fetchUrl = resolved || cache.toProxiedUrl?.(href) || href;
-  try {
-    const response = await fetch(fetchUrl, { credentials: "omit", cache: "force-cache" });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const blob = await response.blob();
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return "";
-  }
-}
-
-async function pdfLoadMediaDataUrls(items) {
-  const loaded = [];
-  for (const item of items) {
-    let dataUrl = "";
-    const href = pdfNormalizeMediaUrl(item.href);
-    if (href) {
-      try {
-        dataUrl = await pdfEnsureDataUrl(href);
-      } catch (_err) {
-        dataUrl = "";
-      }
-    }
-    loaded.push({ item, dataUrl });
-  }
-  return loaded;
+async function pdfLoadMediaDataUrls(items, timeoutMs = 15000) {
+  return Promise.all(
+    (items || []).map(async (item) => {
+      const href = pdfNormalizeMediaUrl(item?.href);
+      const dataUrl = href ? await pdfFetchDataUrl(href, timeoutMs) : "";
+      return { item, dataUrl };
+    })
+  );
 }
 
 async function pdfDrawImageInBox(pdf, dataUrl, x, y, boxW, boxH, pad = 8) {
@@ -3865,16 +3926,24 @@ function pdfFillPage(pdf) {
 
 function pdfDetectImageFormat(dataUrl) {
   if (dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg")) return "JPEG";
-  if (dataUrl.startsWith("data:image/webp")) return "WEBP";
+  if (dataUrl.startsWith("data:image/png")) return "PNG";
+  if (dataUrl.startsWith("data:image/webp")) return "JPEG";
   return "PNG";
 }
 
 function measureDataUrlImage(dataUrl) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
-    img.onerror = () => reject(new Error("Could not measure image."));
-    img.src = dataUrl;
+  return pdfWithTimeout(
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+      img.onerror = () => reject(new Error("Could not measure image."));
+      img.src = dataUrl;
+    }),
+    10000,
+    null
+  ).then((result) => {
+    if (result) return result;
+    throw new Error("Could not measure image.");
   });
 }
 
@@ -4288,12 +4357,8 @@ async function pdfPrepareColorTokens(tokens) {
       continue;
     }
     let dataUrl = "";
-    if (token.color.swatchUrl && window.VitImageCache?.getDataUrl) {
-      try {
-        dataUrl = await VitImageCache.getDataUrl(token.color.swatchUrl);
-      } catch {
-        dataUrl = "";
-      }
+    if (token.color.swatchUrl) {
+      dataUrl = await pdfFetchDataUrl(token.color.swatchUrl, 10000);
     }
     prepared.push({
       ...token,
@@ -4309,12 +4374,8 @@ async function pdfPrepareColorTokens(tokens) {
 async function pdfPrepareSwatchInfo(info) {
   if (!info) return null;
   let dataUrl = "";
-  if (info.swatchUrl && window.VitImageCache?.getDataUrl) {
-    try {
-      dataUrl = await VitImageCache.getDataUrl(info.swatchUrl);
-    } catch {
-      dataUrl = "";
-    }
+  if (info.swatchUrl) {
+    dataUrl = await pdfFetchDataUrl(info.swatchUrl, 10000);
   }
   return { ...info, dataUrl };
 }
@@ -5040,6 +5101,7 @@ async function exportDetailPdf() {
       imageDataUrl = await pdfEnsureDataUrl(imageUrl);
     }
 
+    if (btn) btn.textContent = "Building PDF…";
     await renderVehiclePdfDocument(currentDetailData, imageDataUrl);
   } catch (err) {
     console.error("[pdf]", err);

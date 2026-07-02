@@ -377,10 +377,12 @@ def _dealer_join_suffix() -> str:
 def _filter_reference_coords(ctx: FilterContext) -> Optional[Tuple[float, float]]:
     if expand_state_filter_values(ctx.state_codes or []):
         return None
+    if ctx.search_zip:
+        coords = geocode_postal_code(ctx.search_zip)
+        if coords:
+            return coords
     if ctx.reference_lat is not None and ctx.reference_lng is not None:
         return float(ctx.reference_lat), float(ctx.reference_lng)
-    if ctx.search_zip:
-        return geocode_postal_code(ctx.search_zip)
     return None
 
 
@@ -397,11 +399,14 @@ def _query_dealer_facets(
         lat, lng = ref
         miles = haversine_miles_sql("?", "?")
         distance_sql = f"""
-            MIN(
-                CASE
-                    WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
-                        {miles}
-                END
+            COALESCE(
+                MIN(
+                    CASE
+                        WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
+                            {miles}
+                    END
+                ),
+                MIN(vr.distance)
             ) AS distance_miles
         """
         universe_rows = conn.execute(

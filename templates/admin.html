@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ app_title | default('Vehicle Inventory Tracker') }} Admin</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260702p" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260702q" />
   </head>
   <body class="admin-page" data-make="{{ make_slug | default('toyota') }}">
     <main class="admin-shell">
@@ -111,6 +111,15 @@
         </section>
       </section>
 
+      <section class="admin-card" id="admin-workers-card">
+        <div class="admin-section-header">
+          <h2>Background Workers</h2>
+          <span id="admin-workers-summary" class="admin-muted"></span>
+        </div>
+        <div id="admin-workers-queues" class="admin-workers-queues"></div>
+        <div id="admin-workers-panel" class="admin-workers-panel">Loading worker status…</div>
+      </section>
+
       <section class="admin-grid">
         <article class="admin-card" id="admin-geocode-card">
           <h2>Dealer Geocoding</h2>
@@ -155,7 +164,7 @@
     {% if admin_enabled and authenticated %}
     <script src="/static/vit-common.js?v=20260702p"></script>
     <script src="/static/image-cache.js?v=20260702p"></script>
-    <script src="/static/admin.js?v=20260702g"></script>
+    <script src="/static/admin.js?v=20260702h"></script>
     {% endif %}
   </body>
 </html>

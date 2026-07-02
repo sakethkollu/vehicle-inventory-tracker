@@ -12,6 +12,7 @@ from vehicle_inventory.makes.registry import get_make_adapter, get_make_profile,
 from vehicle_inventory.core.config import Settings, get_settings
 from vehicle_inventory.ingest.router import sync_make_catalog
 from vehicle_inventory.jobs.service import get_job_service
+from vehicle_inventory.jobs.worker_status import get_worker_fleet_status
 from vehicle_inventory.api.inventory import (
     attach_options,
     attach_wheels,
@@ -228,11 +229,17 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             job["message"] = f"{db_remaining} dealer(s) need geocoding. Job not running."
         geocode_payload["job"] = job
         jobs_active = request_jobs().jobs_are_active(ingest_live, job)
+        runtime_settings = get_settings()
+        workers = get_worker_fleet_status(
+            redis_url=runtime_settings.redis_url,
+            use_redis_jobs=runtime_settings.use_redis_jobs,
+        )
         return jsonify(
             {
                 "ingest": ingest_live,
                 "geocode": geocode_payload,
                 "jobs_active": jobs_active,
+                "workers": workers,
                 "make": {
                     "slug": current_make().slug,
                     "display_name": current_make().display_name,

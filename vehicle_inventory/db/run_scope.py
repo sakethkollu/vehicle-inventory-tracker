@@ -34,6 +34,30 @@ def ensure_series_latest_runs_table(conn: DbConnection) -> None:
     )
 
 
+def pin_series_latest_run(conn: DbConnection, series_code: str, run_id: int) -> None:
+    """Point inventory queries at ``run_id`` for one series as ingest pages land."""
+    code = str(series_code or "").strip()
+    if not code:
+        return
+    ensure_series_latest_runs_table(conn)
+    conn.execute(
+        """
+        INSERT INTO series_latest_runs (series_code, run_id, refreshed_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(series_code) DO UPDATE SET
+            run_id=CASE
+                WHEN excluded.run_id >= series_latest_runs.run_id THEN excluded.run_id
+                ELSE series_latest_runs.run_id
+            END,
+            refreshed_at=CASE
+                WHEN excluded.run_id >= series_latest_runs.run_id THEN excluded.refreshed_at
+                ELSE series_latest_runs.refreshed_at
+            END
+        """,
+        (code, int(run_id), utc_now()),
+    )
+
+
 def refresh_series_latest_runs(conn: DbConnection, *, force: bool = False) -> int:
     """Rebuild the per-series latest run cache used by inventory/filter queries."""
     ensure_series_latest_runs_table(conn)

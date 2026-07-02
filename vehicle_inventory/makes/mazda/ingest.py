@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from vehicle_inventory.db import InventoryDb, utc_now
-from vehicle_inventory.db.run_scope import refresh_series_latest_runs
+from vehicle_inventory.db.backend import commit_with_retry
+from vehicle_inventory.db.run_scope import pin_series_latest_run, refresh_series_latest_runs
 from vehicle_inventory.ingest.progress import IngestProgress, ProgressCallback, emit_progress
 from vehicle_inventory.makes.mazda.client import (
     MAZDA_ORIGIN,
@@ -418,6 +419,12 @@ def _estimated_total_pages(total_vehicles: int, page_size: int) -> int:
     return max(1, math.ceil(max(total_vehicles, 1) / max(page_size, 1)))
 
 
+def _commit_ingest_page(db: InventoryDb, *, run_id: int, series_code: str) -> None:
+    """Flush one fetched page so inventory/API queries can see new vehicles immediately."""
+    pin_series_latest_run(db.conn, series_code, run_id)
+    commit_with_retry(db.conn)
+
+
 def _pagination_should_stop(
     *,
     vehicles_on_page: int,
@@ -726,6 +733,8 @@ def run_mazda_ingest(
                         f"{vehicles_persisted:,} total saved)"
                     ),
                 )
+                if new_on_page > 0:
+                    _commit_ingest_page(db, run_id=run_id, series_code=carline)
 
                 if _pagination_should_stop(
                     vehicles_on_page=len(vehicles),
@@ -745,9 +754,8 @@ def run_mazda_ingest(
 
             progress.completed_models.append(carline)
 
-        db.conn.commit()
         refresh_series_latest_runs(db.conn, force=True)
-        db.conn.commit()
+        commit_with_retry(db.conn)
 
         from vehicle_inventory.jobs.service import get_job_service
 
@@ -761,18 +769,23 @@ def run_mazda_ingest(
         else:
             geocode_message = "Dealer geocoding already running in background."
         emit_progress(progress, progress_callback, message=geocode_message)
+        emit_progress(
+            progress,
+            progress_callback,
+            status="completed",
+            phase="done",
+            percent=100.0,
+            message=f"Mazda ingest complete ({progress.vehicles_persisted:,} vehicles).",
+        )
+        return progress
+    except Exception:
+        try:
+            db.conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
-
-    emit_progress(
-        progress,
-        progress_callback,
-        status="completed",
-        phase="done",
-        percent=100.0,
-        message=f"Mazda ingest complete ({progress.vehicles_persisted:,} vehicles).",
-    )
-    return progress
 
 
 def run_mazda_dealer_vehicle_refresh(
@@ -964,6 +977,8 @@ def run_mazda_dealer_vehicle_refresh(
                             f"{vehicles_persisted:,} total saved)"
                         ),
                     )
+                    if new_on_page > 0:
+                        _commit_ingest_page(db, run_id=run_id, series_code=carline)
 
                     if _pagination_should_stop(
                         vehicles_on_page=len(vehicles),
@@ -988,9 +1003,8 @@ def run_mazda_dealer_vehicle_refresh(
             if vehicles_persisted > zip_saved_before:
                 zips_with_inventory += 1
 
-        db.conn.commit()
         refresh_series_latest_runs(db.conn, force=True)
-        db.conn.commit()
+        commit_with_retry(db.conn)
 
         from vehicle_inventory.jobs.service import get_job_service
 
@@ -1004,18 +1018,23 @@ def run_mazda_dealer_vehicle_refresh(
         else:
             geocode_message = "Dealer geocoding already running in background."
         emit_progress(progress, progress_callback, message=geocode_message)
+        emit_progress(
+            progress,
+            progress_callback,
+            status="completed",
+            phase="done",
+            percent=100.0,
+            message=(
+                f"Dealer ZIP refresh complete ({vehicles_persisted:,} vehicles from "
+                f"{zips_with_inventory}/{zips_processed} ZIP(s))."
+            ),
+        )
+        return progress
+    except Exception:
+        try:
+            db.conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
-
-    emit_progress(
-        progress,
-        progress_callback,
-        status="completed",
-        phase="done",
-        percent=100.0,
-        message=(
-            f"Dealer ZIP refresh complete ({vehicles_persisted:,} vehicles from "
-            f"{zips_with_inventory}/{zips_processed} ZIP(s))."
-        ),
-    )
-    return progress

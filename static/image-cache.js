@@ -8,6 +8,7 @@
   const LS_MAX_ENTRIES = 200;
   const LS_MAX_BYTES = 480_000;
   const MAX_CONCURRENT = 4;
+  const FETCH_TIMEOUT_MS = 25000;
   const PLACEHOLDER =
     "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
@@ -19,9 +20,16 @@
   let observer = null;
 
   function normalizeImageUrl(url) {
-    return String(url || "")
-      .trim()
-      .replace(/^https:\/\/www\.mazdausa\.com:443/i, "https://www.mazdausa.com");
+    let value = String(url || "").trim();
+    if (!value) {
+      return "";
+    }
+    if (value.startsWith("/") && !value.startsWith("//")) {
+      if (currentMakeSlug() === "mazda") {
+        value = `https://www.mazdausa.com${value}`;
+      }
+    }
+    return value.replace(/^https:\/\/www\.mazdausa\.com:443/i, "https://www.mazdausa.com");
   }
 
   function canUseCacheApi() {
@@ -271,9 +279,19 @@
     });
   }
 
+  async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function fetchImageBlob(url) {
     const fetchUrl = toProxiedUrl(url);
-    const response = await fetch(fetchUrl, { credentials: "omit", cache: "force-cache" });
+    const response = await fetchWithTimeout(fetchUrl, { credentials: "omit", cache: "force-cache" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -339,7 +357,7 @@
       return resolved;
     }
     try {
-      const response = await fetch(resolved, { credentials: "omit", cache: "force-cache" });
+      const response = await fetchWithTimeout(resolved, { credentials: "omit", cache: "force-cache" });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -348,7 +366,7 @@
       writeLocalStorage(url, dataUrl, blob.size);
       return rememberResolved(url, dataUrl);
     } catch {
-      return resolved;
+      return resolved.startsWith("data:") ? resolved : "";
     }
   }
 

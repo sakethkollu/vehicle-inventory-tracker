@@ -2174,6 +2174,89 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   margin-bottom: 16px;
 }
 
+.admin-workers-queues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.admin-workers-queue-chip {
+  background: #2b2b2b;
+  border: 1px solid #4a4f54;
+  border-radius: 999px;
+  color: #bbb;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.admin-workers-panel {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.admin-worker-card {
+  background: #2b2b2b;
+  border: 1px solid #4a4f54;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.admin-worker-card-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.admin-worker-meta {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.admin-worker-job {
+  background: #262626;
+  border: 1px solid #3d4247;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.admin-worker-job-idle {
+  color: #888;
+  font-style: italic;
+}
+
+.admin-worker-job-title {
+  color: #ddd;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.admin-worker-job-detail {
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.admin-worker-foot {
+  color: #888;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 8px 16px;
+  justify-content: space-between;
+}
+
+.job-run-status.idle,
+.job-run-status.suspended {
+  background: #4a4f54;
+  color: #ddd;
+}
+
 .admin-card {
   background: #313335;
   border: 1px solid #4a4f54;

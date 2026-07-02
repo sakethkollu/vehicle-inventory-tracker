@@ -51,6 +51,129 @@ function formatJobType(jobType) {
   );
 }
 
+function formatWorkerState(state) {
+  const normalized = String(state || "unknown").toLowerCase();
+  return (
+    {
+      idle: "Idle",
+      busy: "Busy",
+      suspended: "Suspended",
+      started: "Busy",
+    }[normalized] || normalized
+  );
+}
+
+function formatWorkerJobType(jobType) {
+  return formatJobType(jobType || "task");
+}
+
+function formatWorkerHeartbeat(iso) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const ageSec = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (ageSec < 60) return `${ageSec}s ago`;
+  const mins = Math.floor(ageSec / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return date.toLocaleString();
+}
+
+function renderWorkersPanel(workersPayload) {
+  const panel = qs("admin-workers-panel");
+  const summaryEl = qs("admin-workers-summary");
+  const queuesEl = qs("admin-workers-queues");
+  if (!panel) return;
+
+  const payload = workersPayload || {};
+  const summary = payload.summary || {};
+  const queues = payload.queues || [];
+  const workerRows = payload.workers || [];
+
+  if (summaryEl) {
+    if (!payload.enabled) {
+      summaryEl.textContent = payload.message || "Redis jobs disabled";
+    } else {
+      const expected = Number(payload.expected_workers || 0);
+      summaryEl.textContent = `${summary.total || 0}/${expected || "?"} online · ${summary.busy || 0} busy · ${summary.idle || 0} idle`;
+    }
+  }
+
+  if (queuesEl) {
+    if (!payload.enabled || !queues.length) {
+      queuesEl.innerHTML = payload.message
+        ? `<p class="admin-muted">${escapeHtml(payload.message)}</p>`
+        : "";
+    } else {
+      queuesEl.innerHTML = queues
+        .map(
+          (queue) =>
+            `<span class="admin-workers-queue-chip"><strong>${escapeHtml(queue.name)}</strong>: ${Number(queue.queued || 0).toLocaleString()} queued · ${Number(queue.started || 0).toLocaleString()} started · ${Number(queue.failed || 0).toLocaleString()} failed</span>`
+        )
+        .join("");
+    }
+  }
+
+  if (!payload.enabled) {
+    panel.innerHTML = `<p class="admin-muted">${escapeHtml(payload.message || "Background workers are not available.")}</p>`;
+    return;
+  }
+
+  if (!workerRows.length) {
+    panel.innerHTML = `<p class="admin-muted">${escapeHtml(payload.message || "No workers connected.")}</p>`;
+    return;
+  }
+
+  panel.innerHTML = workerRows
+    .map((worker) => {
+      const state = String(worker.state || "unknown").toLowerCase();
+      const job = worker.current_job || null;
+      const makeLabel = job?.make ? String(job.make).toUpperCase() : "";
+      const jobType = job?.job_type ? formatWorkerJobType(job.job_type) : "";
+      const jobRunId = job?.job_run_id != null ? `#${job.job_run_id}` : "";
+      const progress =
+        job?.percent != null && Number.isFinite(Number(job.percent))
+          ? `${Math.round(Number(job.percent))}%`
+          : "";
+      const detailParts = [
+        job?.message,
+        job?.detail,
+        progress ? `Progress ${progress}` : "",
+      ].filter(Boolean);
+      const currentJobHtml = job
+        ? `<div class="admin-worker-job">
+            <div class="admin-worker-job-title">${escapeHtml([makeLabel, jobType, jobRunId].filter(Boolean).join(" · ") || job.task_label || "Current job")}</div>
+            <div class="admin-worker-job-detail">${escapeHtml(detailParts.join(" · ") || job.description || "Running…")}</div>
+          </div>`
+        : `<div class="admin-worker-job admin-worker-job-idle">Waiting for work</div>`;
+      const queueLabels = (worker.queues || []).map((name) => escapeHtml(name)).join(", ") || "—";
+      return `<article class="admin-worker-card">
+        <div class="admin-worker-card-head">
+          <div>
+            <strong>${escapeHtml(worker.name || "worker")}</strong>
+            <div class="admin-muted admin-worker-meta">PID ${escapeHtml(worker.pid ?? "—")} · ${escapeHtml(worker.hostname || "host")}</div>
+          </div>
+          <span class="job-run-status ${escapeHtml(state)}">${escapeHtml(formatWorkerState(state))}</span>
+        </div>
+        ${currentJobHtml}
+        <div class="admin-worker-foot">
+          <span>Queues: ${queueLabels}</span>
+          <span>Heartbeat: ${escapeHtml(formatWorkerHeartbeat(worker.last_heartbeat))}</span>
+        </div>
+      </article>`;
+    })
+    .join("");
+}
+
+function isWorkersActive(workersPayload) {
+  const summary = workersPayload?.summary || {};
+  const queues = workersPayload?.queues || [];
+  const queuedTotal = queues.reduce((sum, queue) => sum + Number(queue.queued || 0), 0);
+  return Boolean(
+    workersPayload?.enabled &&
+      ((summary.busy || 0) > 0 || queuedTotal > 0)
+  );
+}
+
 function summarizeParams(run) {
   const params = run.params || {};
   if (run.job_type === "ingest") {
@@ -691,13 +814,14 @@ function renderIngestLogs(status) {
 
 function isAdminJobActive(payload) {
   if (typeof payload?.jobs_active === "boolean") {
-    return payload.jobs_active;
+    return payload.jobs_active || isWorkersActive(payload.workers);
   }
   const ingestStatus = payload?.ingest?.status;
   const geocodeStatus = payload?.geocode?.job?.status;
   return (
     window.VIT?.isJobStatusActive?.(ingestStatus) ||
-    window.VIT?.isJobStatusActive?.(geocodeStatus)
+    window.VIT?.isJobStatusActive?.(geocodeStatus) ||
+    isWorkersActive(payload?.workers)
   );
 }
 
@@ -862,6 +986,8 @@ function renderOverview(payload) {
   if (window.VIT?.isJobStatusActive?.(ingest.status)) {
     setIngestUiRunning(true);
   }
+
+  renderWorkersPanel(payload.workers);
 
   const geocode = payload.geocode?.job || {};
   const geoStats = payload.geocode || {};
