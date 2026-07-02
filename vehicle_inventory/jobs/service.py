@@ -118,7 +118,7 @@ class JobService:
             func_path,
             *args,
             job_id=job_id,
-            timeout=timeout,
+            job_timeout=timeout,
         )
         log.info(
             "rq_job_enqueued",
