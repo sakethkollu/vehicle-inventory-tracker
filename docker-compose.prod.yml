@@ -1,0 +1,18 @@
+# Production overlay for ZimaOS / homelab deploy.
+# - Web UI only on localhost:5050 (for Tailscale Funnel)
+# - MySQL, Redis, Adminer, Redis Commander not published to the host
+#
+# Usage:
+#   cp .env.example .env   # set secrets (see below)
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+services:
+  redis:
+    ports: !reset []
+
+  mysql:
+    ports: !reset []
+
+  web:
+    ports:
+      - "127.0.0.1:5050:5050"
