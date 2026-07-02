@@ -1472,6 +1472,30 @@ def _run_distance_bound_sql(vr_alias: str, op: str) -> str:
     return f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance {op} ?"
 
 
+def dealer_display_distance_sql(
+    haversine_miles_expr: str,
+    *,
+    vr_alias: str = "vr",
+) -> str:
+    """Best-effort dealer distance for facet labels (matches filter OR semantics)."""
+    return f"""
+        MIN(
+            CASE
+                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL
+                     AND {vr_alias}.distance IS NOT NULL THEN
+                    CASE
+                        WHEN ({haversine_miles_expr}) <= {vr_alias}.distance
+                        THEN ({haversine_miles_expr})
+                        ELSE {vr_alias}.distance
+                    END
+                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
+                    ({haversine_miles_expr})
+                ELSE {vr_alias}.distance
+            END
+        ) AS distance_miles
+    """
+
+
 def _append_distance_max_filter(
     where: List[str],
     params: List,

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from vehicle_inventory.db.backend import DbConnection
 from vehicle_inventory.geo.dealer_geo import (
     append_run_location_filters,
+    dealer_display_distance_sql,
     ensure_dealer_geo_cache_table,
     expand_state_filter_values,
     geocode_postal_code,
@@ -398,17 +399,7 @@ def _query_dealer_facets(
     if ref:
         lat, lng = ref
         miles = haversine_miles_sql("?", "?")
-        distance_sql = f"""
-            COALESCE(
-                MIN(
-                    CASE
-                        WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
-                            {miles}
-                    END
-                ),
-                MIN(vr.distance)
-            ) AS distance_miles
-        """
+        distance_sql = dealer_display_distance_sql(miles)
         universe_rows = conn.execute(
             f"""
             SELECT
