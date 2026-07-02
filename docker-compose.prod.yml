@@ -1,18 +1,38 @@
-# Production overlay for ZimaOS / homelab deploy.
-# - Web UI on host localhost:5052 → container :5050 (Caddy / Tailscale Funnel)
-# - MySQL, Redis, Adminer, Redis Commander not published to the host
+# Production overlay for ZimaOS / homelab deploy (Caddy on host network).
+# - web uses host networking and listens on 127.0.0.1:5052 (same as other Caddy backends)
+# - mysql/redis published on localhost only so host-network web can reach them
+# - worker stays on the default bridge and keeps using mysql/redis service names
 #
 # Usage:
 #   cp .env.example .env   # set secrets (see below)
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Caddyfile:
+#   vehicles.sakethkollu.me {
+#       reverse_proxy 127.0.0.1:5052
+#   }
 
 services:
   redis:
-    ports: !reset []
+    ports: !reset ["127.0.0.1:16379:6379"]
 
   mysql:
-    ports: !reset []
+    ports: !reset ["127.0.0.1:13306:3306"]
 
   web:
-    ports: !reset
-      - "127.0.0.1:5052:5050"
+    network_mode: host
+    ports: !reset []
+    command:
+      [
+        "uvicorn",
+        "vehicle_inventory.app:create_app",
+        "--factory",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5052",
+      ]
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@127.0.0.1:13306/${MYSQL_DATABASE}
+      REDIS_URL: redis://127.0.0.1:16379/0
+      MAZDA_DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@127.0.0.1:13306/${MAZDA_DATABASE:-mazda_inventory}
