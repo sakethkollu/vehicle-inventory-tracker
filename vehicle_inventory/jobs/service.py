@@ -110,7 +110,6 @@ class JobService:
         queue,
         func_path: str,
         *args,
-        *,
         job_id: str,
         timeout: int,
     ):
