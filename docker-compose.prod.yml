@@ -18,10 +18,3 @@ services:
   mysql:
     ports: !reset []
 
-  web:
-    ports: !reset ["127.0.0.1:5052:5050"]
-    environment:
-      # Always use Docker service names (not 127.0.0.1) unless web also uses network_mode: host
-      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
-      REDIS_URL: redis://redis:6379/0
-      MAZDA_DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MAZDA_DATABASE:-mazda_inventory}
