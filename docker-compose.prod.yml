@@ -1,5 +1,5 @@
 # Production overlay for ZimaOS / homelab deploy.
-# - Web UI only on localhost:5050 (for Tailscale Funnel)
+# - Web UI on host localhost:5052 → container :5050 (Caddy / Tailscale Funnel)
 # - MySQL, Redis, Adminer, Redis Commander not published to the host
 #
 # Usage:
@@ -15,4 +15,4 @@ services:
 
   web:
     ports:
-      - "127.0.0.1:5050:5050"
+      - "127.0.0.1:5052:5050"

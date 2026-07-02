@@ -65,8 +65,8 @@ docker compose up --build
 
 Open:
 
-- **Explorer:** [http://127.0.0.1:5050](http://127.0.0.1:5050)
-- **Admin:** [http://127.0.0.1:5050/admin](http://127.0.0.1:5050/admin) (sign in with `ADMIN_PASSWORD`)
+- **Explorer:** [http://127.0.0.1:5052](http://127.0.0.1:5052) (Docker host port; container listens on 5050)
+- **Admin:** [http://127.0.0.1:5052/admin](http://127.0.0.1:5052/admin) (sign in with `ADMIN_PASSWORD`)
 - **MySQL (Adminer):** [http://127.0.0.1:8080](http://127.0.0.1:8080) — System: **MySQL**, Server: **mysql**, credentials from `.env`
 - **Redis (Redis Commander):** [http://127.0.0.1:8081](http://127.0.0.1:8081) — browse keys such as `vit:toyota:job:live:ingest`
 

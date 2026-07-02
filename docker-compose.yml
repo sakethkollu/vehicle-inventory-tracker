@@ -36,7 +36,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "5050:5050"
+      - "5052:5050"
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
