@@ -4,35 +4,19 @@ const DEFAULT_SEARCH_ZIP = "95132";
 const DEFAULT_SEARCH_RADIUS_MILES = 50;
 
 function searchZipStorageKey() {
-  const make = window.VIT?.currentMake || "toyota";
-  return `vit-search-zip:${make}`;
+  return window.VIT?.searchZipStorageKey?.() || `vit-search-zip:${window.VIT?.currentMake || "toyota"}`;
 }
 
 function searchRadiusStorageKey() {
-  const make = window.VIT?.currentMake || "toyota";
-  return `vit-search-radius:${make}`;
+  return window.VIT?.searchRadiusStorageKey?.() || `vit-search-radius:${window.VIT?.currentMake || "toyota"}`;
 }
 
 function readStoredSearchZip() {
-  try {
-    const make = window.VIT?.currentMake || "toyota";
-    const key = searchZipStorageKey();
-    let value = localStorage.getItem(key);
-    if (!value && make === "toyota") {
-      value = localStorage.getItem("toyota-search-zip");
-    }
-    return value;
-  } catch (_err) {
-    return null;
-  }
+  return window.VIT?.readStoredSearchZip?.() ?? null;
 }
 
 function readStoredSearchRadius() {
-  try {
-    return localStorage.getItem(searchRadiusStorageKey());
-  } catch (_err) {
-    return null;
-  }
+  return window.VIT?.readStoredSearchRadius?.() ?? null;
 }
 
 function defaultSearchZip() {
@@ -101,17 +85,14 @@ function applySearchLocation(zip, radiusMiles) {
   const zipEl = qs("search-zip-code");
   const distanceEl = qs("distance-max-miles");
   const ingestZipEl = qs("ingest-zip-code");
+  const ingestDistanceEl = qs("ingest-distance");
   const normalizedZip = normalizeZipCode(zip) || defaultSearchZip();
   const radius = Number(radiusMiles) > 0 ? Number(radiusMiles) : DEFAULT_SEARCH_RADIUS_MILES;
   if (zipEl) zipEl.value = normalizedZip;
   if (distanceEl) distanceEl.value = String(radius);
   if (ingestZipEl) ingestZipEl.value = normalizedZip;
-  try {
-    localStorage.setItem(searchZipStorageKey(), normalizedZip);
-    localStorage.setItem(searchRadiusStorageKey(), String(radius));
-  } catch (_err) {
-    // Ignore storage failures (private mode, quota, etc.).
-  }
+  if (ingestDistanceEl) ingestDistanceEl.value = String(radius);
+  window.VIT?.persistSearchLocation?.(normalizedZip, radius);
 }
 
 function filtersStorageKey() {
@@ -2950,7 +2931,10 @@ function renderSortIndicators() {
   });
 }
 
-function getIngestSettingsPayload() {
+function getIngestSettingsPayload(options) {
+  if (window.VIT?.getIngestSettingsPayload) {
+    return window.VIT.getIngestSettingsPayload(options);
+  }
   const defaults = window.VIT?.getIngestDefaults?.(window.VIT?.currentMake) || {
     zip: "95132",
     distance: 500,
@@ -3142,6 +3126,8 @@ function renderIngestProgress(status) {
   bar.value = pct;
 
   const parts = [];
+  const scope = window.VIT?.formatIngestScope?.(status);
+  if (scope) parts.push(scope);
   if (status.current_model_title || status.current_model) {
     parts.push(`Model ${status.model_index || 0}/${status.total_models || 0}: ${status.current_model_title || status.current_model}`);
   }
@@ -3215,7 +3201,7 @@ async function syncModelCatalog({ afterIngest = false } = {}) {
     await fetchJson("/api/catalog/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(getIngestSettingsPayload()),
+      body: JSON.stringify(getIngestSettingsPayload({ forCatalogSync: true })),
     });
     await loadCatalogModels();
     await loadJobRuns().catch(() => {});
@@ -3255,12 +3241,16 @@ async function startIngest({ allModels = false } = {}) {
     }
   }
 
+  window.VIT?.persistSearchLocation?.(payload.zip_code, payload.distance);
   setIngestUiRunning(true);
   ingestUiState.watchedIngestSession = true;
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
     status: "queued",
-    message: "Starting ingest...",
+    job_type: "ingest",
+    zip_code: payload.zip_code,
+    distance: payload.distance,
+    message: `Queued ingest near ZIP ${payload.zip_code} (${payload.distance} mi)...`,
     percent: 0,
   });
 
@@ -5103,7 +5093,10 @@ function summarizeJobParams(run) {
     const models = params.all_models
       ? "all models"
       : `${(params.model_codes || []).length} model(s)`;
-    return `ZIP ${params.zip_code ?? "—"}, ${params.distance ?? "—"} mi, ${models}`;
+    const scope = params.nationwide
+      ? "nationwide"
+      : `ZIP ${params.zip_code ?? "—"}, ${params.distance ?? "—"} mi`;
+    return `${scope}, ${models}`;
   }
   if (run.job_type === "geocode") {
     const limit = params.limit == null ? "all remaining" : `${params.limit} max`;

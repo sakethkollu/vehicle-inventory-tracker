@@ -39,8 +39,28 @@ def test_ingest_params_from_payload():
         make_slug="toyota",
     )
     assert params["zip_code"] == "95132"
+    assert params["distance"] == 500
+    assert params["page_size"] == 250
     assert params["make"] == "toyota"
     assert params["lead_id"] == "abc"
+
+
+def test_ingest_params_from_payload_applies_make_defaults():
+    toyota = ingest_params_from_payload({}, all_models=True, model_codes=[], make_slug="toyota")
+    assert toyota["zip_code"] == "95132"
+    assert toyota["distance"] == 500
+    assert toyota["page_size"] == 250
+
+    mazda = ingest_params_from_payload({}, all_models=True, model_codes=[], make_slug="mazda")
+    assert mazda["zip_code"] == "95101"
+    assert mazda["distance"] == 50
+    assert mazda["page_size"] == 100
+    assert mazda["nationwide"] is False
+
+    mazda_nationwide = ingest_params_from_payload(
+        {"nationwide": True}, all_models=True, model_codes=[], make_slug="mazda"
+    )
+    assert mazda_nationwide["nationwide"] is True
 
 
 def test_geocode_params():

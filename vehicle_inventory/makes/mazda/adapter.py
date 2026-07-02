@@ -39,7 +39,7 @@ class MazdaAdapter:
             model_codes = None
         all_models = bool(payload.get("all_models"))
         nationwide_raw = payload.get("nationwide")
-        nationwide = True if nationwide_raw is None else bool(nationwide_raw)
+        nationwide = False if nationwide_raw is None else bool(nationwide_raw)
         return IngestRequest(
             database_url=database_url,
             schema_path=schema_path,

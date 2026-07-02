@@ -14,6 +14,115 @@ VIT.getIngestDefaults = function getIngestDefaults(slug) {
   return VIT.MAKE_DEFAULTS[slug] || VIT.MAKE_DEFAULTS.toyota;
 };
 
+VIT.searchZipStorageKey = function searchZipStorageKey(make) {
+  const slug = make || VIT.currentMake || "toyota";
+  return `vit-search-zip:${slug}`;
+};
+
+VIT.searchRadiusStorageKey = function searchRadiusStorageKey(make) {
+  const slug = make || VIT.currentMake || "toyota";
+  return `vit-search-radius:${slug}`;
+};
+
+VIT.readStoredSearchZip = function readStoredSearchZip(make) {
+  try {
+    const slug = make || VIT.currentMake || "toyota";
+    const key = VIT.searchZipStorageKey(slug);
+    let value = localStorage.getItem(key);
+    if (!value && slug === "toyota") {
+      value = localStorage.getItem("toyota-search-zip");
+    }
+    return value;
+  } catch (_err) {
+    return null;
+  }
+};
+
+VIT.readStoredSearchRadius = function readStoredSearchRadius(make) {
+  try {
+    return localStorage.getItem(VIT.searchRadiusStorageKey(make));
+  } catch (_err) {
+    return null;
+  }
+};
+
+VIT.persistSearchLocation = function persistSearchLocation(zip, radiusMiles, make) {
+  try {
+    const normalizedZip = String(zip || "").trim();
+    const radius = Number(radiusMiles);
+    if (normalizedZip) {
+      localStorage.setItem(VIT.searchZipStorageKey(make), normalizedZip);
+    }
+    if (Number.isFinite(radius) && radius > 0) {
+      localStorage.setItem(VIT.searchRadiusStorageKey(make), String(radius));
+    }
+  } catch (_err) {
+    // Ignore storage failures (private mode, quota, etc.).
+  }
+};
+
+VIT.hydrateIngestLocationFields = function hydrateIngestLocationFields() {
+  const defaults = VIT.getIngestDefaults(VIT.currentMake);
+  const storedZip = VIT.readStoredSearchZip();
+  const storedRadius = VIT.readStoredSearchRadius();
+  const zipEl = document.getElementById("ingest-zip-code");
+  const distEl = document.getElementById("ingest-distance");
+  if (zipEl && !zipEl.value.trim()) {
+    zipEl.value = storedZip || defaults.zip;
+  }
+  if (distEl && !distEl.value.trim()) {
+    distEl.value = storedRadius || String(defaults.distance);
+  }
+};
+
+VIT.getIngestSettingsPayload = function getIngestSettingsPayload(options = {}) {
+  const defaults = VIT.getIngestDefaults(VIT.currentMake);
+  const zipRaw =
+    document.getElementById("ingest-zip-code")?.value?.trim() ||
+    document.getElementById("search-zip-code")?.value?.trim() ||
+    VIT.readStoredSearchZip() ||
+    defaults.zip;
+  const distanceRaw =
+    document.getElementById("ingest-distance")?.value?.trim() ||
+    document.getElementById("distance-max-miles")?.value?.trim() ||
+    VIT.readStoredSearchRadius() ||
+    String(defaults.distance);
+  const distance = Number(distanceRaw);
+  let nationwide;
+  if (options.nationwide != null) {
+    nationwide = Boolean(options.nationwide);
+  } else if (options.forCatalogSync) {
+    nationwide = defaults.nationwide !== false;
+  } else {
+    nationwide = false;
+  }
+  return {
+    zip_code: zipRaw,
+    distance: Number.isFinite(distance) && distance > 0 ? distance : defaults.distance,
+    page_size: defaults.pageSize,
+    nationwide,
+  };
+};
+
+VIT.formatIngestScope = function formatIngestScope(status) {
+  if (!status) return "";
+  if (status.job_type === "dealer_vehicle_refresh") {
+    return "1 mi radius per dealer ZIP";
+  }
+  if (status.nationwide) {
+    return "Nationwide dealer search";
+  }
+  const zip = status.zip_code;
+  const distance = status.distance;
+  if (!zip && (distance == null || distance === "")) return "";
+  if (zip && distance != null && distance !== "") {
+    return `Near ZIP ${zip} · ${distance} mi radius`;
+  }
+  if (zip) return `Near ZIP ${zip}`;
+  if (distance != null && distance !== "") return `${distance} mi radius`;
+  return "";
+};
+
 VIT.isJobStatusActive = function isJobStatusActive(status) {
   return status === "running" || status === "queued";
 };

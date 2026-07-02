@@ -670,9 +670,29 @@ _GENERIC_PLACE_TOKENS = frozenset(
 
 def _dealer_name_tokens(dealer_name: str) -> List[str]:
     cleaned = (dealer_name or "").lower()
-    for token in ("toyota", "of", "the", "and", "motor", "motors", "sales", "inc", "llc"):
+    for token in (
+        "toyota",
+        "mazda",
+        "of",
+        "the",
+        "and",
+        "motor",
+        "motors",
+        "sales",
+        "inc",
+        "llc",
+    ):
         cleaned = cleaned.replace(token, " ")
     return [token for token in re.split(r"\W+", cleaned) if len(token) >= 3]
+
+
+def _dealer_brand_label(dealer_name: str) -> str:
+    lowered = (dealer_name or "").lower()
+    if "mazda" in lowered:
+        return "Mazda"
+    if "toyota" in lowered:
+        return "Toyota"
+    return "auto"
 
 
 def _distinctive_dealer_tokens(dealer_name: str) -> List[str]:
@@ -683,15 +703,16 @@ def _distinctive_dealer_tokens(dealer_name: str) -> List[str]:
 
 def _extract_dealer_place(dealer_name: str) -> str:
     name = (dealer_name or "").strip()
-    match = re.match(r"(?i)toyota of (.+)", name)
-    if match:
-        return match.group(1).strip()
-    match = re.match(r"(?i)toyota on (.+)", name)
-    if match:
-        return match.group(1).strip()
-    match = re.match(r"(?i).+ toyota of (.+)", name)
-    if match:
-        return match.group(1).strip()
+    for pattern in (
+        r"(?i)toyota of (.+)",
+        r"(?i)mazda of (.+)",
+        r"(?i)toyota on (.+)",
+        r"(?i).+ toyota of (.+)",
+        r"(?i).+ mazda of (.+)",
+    ):
+        match = re.match(pattern, name)
+        if match:
+            return match.group(1).strip()
     return ""
 
 
@@ -731,16 +752,17 @@ def _dealer_query_candidates(
         add(name)
         add(f"{name}, USA")
     place = _extract_dealer_place(name)
+    brand = _dealer_brand_label(name)
     if place:
         add(f"{place}, USA")
-        add(f"Toyota, {place}, USA")
-        add(f"Toyota dealership, {place}, USA")
+        add(f"{brand}, {place}, USA")
+        add(f"{brand} dealership, {place}, USA")
     if city_hint:
         add(f"{name}, {city_hint}, USA")
-        add(f"Toyota dealership, {city_hint}, USA")
+        add(f"{brand} dealership, {city_hint}, USA")
         add(f"{city_hint}, USA")
     if name:
-        add(f"{name}, Toyota dealership, USA")
+        add(f"{name}, {brand} dealership, USA")
     if dealer_website:
         add(dealer_website)
     return queries
@@ -844,7 +866,10 @@ def _photon_geocode_query(
         )
         if require_name_match:
             poi_name = str(props.get("name") or "").lower()
-            if "toyota" in (dealer_name or "").lower() and "toyota" not in poi_name:
+            lowered_name = (dealer_name or "").lower()
+            if "toyota" in lowered_name and "toyota" not in poi_name:
+                continue
+            if "mazda" in lowered_name and "mazda" not in poi_name:
                 continue
             if place_tokens:
                 if not _dealer_geo_matches_name(dealer_name, geo):
@@ -900,6 +925,8 @@ def _photon_hint_geo(dealer_name: str, query: str) -> Optional[GeoTuple]:
             if token in haystack:
                 score += 3
         if "toyota" in poi_name and "toyota" in (dealer_name or "").lower():
+            score += 5
+        if "mazda" in poi_name and "mazda" in (dealer_name or "").lower():
             score += 5
         if score > best_score:
             best_score = score
@@ -1021,7 +1048,18 @@ def _is_preferred_geo_query(query_text: str) -> bool:
         text.startswith("website")
         or text.startswith("photon:")
         or text.startswith("toyota.com:")
+        or text.startswith("oem:")
     )
+
+
+def _preferred_geo_query_sql(column: str = "dgc.query_text") -> str:
+    col = f"TRIM(COALESCE({column}, ''))"
+    return f"""(
+            {col} LIKE 'website%'
+            OR {col} LIKE 'photon:%'
+            OR {col} LIKE 'toyota.com:%'
+            OR {col} LIKE 'oem:%'
+          )"""
 
 
 def geocode_dealer_record(
@@ -1161,7 +1199,7 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
         """
     ).fetchone()
     preferred = conn.execute(
-        """
+        f"""
         SELECT COUNT(DISTINCT d.dealer_cd) AS total
         FROM dealers d
         JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
@@ -1171,11 +1209,7 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
           AND dgc.latitude IS NOT NULL
           AND COALESCE(dgc.state, '') != ''
           AND LENGTH(TRIM(COALESCE(dgc.state, ''))) <= 2
-          AND (
-            TRIM(COALESCE(dgc.query_text, '')) LIKE 'website%'
-            OR TRIM(COALESCE(dgc.query_text, '')) LIKE 'photon:%'
-            OR TRIM(COALESCE(dgc.query_text, '')) LIKE 'toyota.com:%'
-          )
+          AND {_preferred_geo_query_sql()}
         """
     ).fetchone()
     total_count = int(total["total"]) if total else 0
@@ -1185,7 +1219,7 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
         "dealers_in_inventory": total_count,
         "geocoded": geocoded_count,
         "preferred_geocoded": preferred_count,
-        "remaining": max(0, total_count - preferred_count),
+        "remaining": max(0, total_count - geocoded_count),
     }
 
 
@@ -1209,15 +1243,9 @@ def _fetch_dealers_needing_geocode(
                 WHERE dgc.dealer_cd = d.dealer_cd
                   AND (
                     dgc.latitude IS NULL
+                    OR dgc.longitude IS NULL
                     OR COALESCE(dgc.state, '') = ''
                     OR LENGTH(TRIM(COALESCE(dgc.state, ''))) > 2
-                    OR (
-                      dgc.latitude IS NOT NULL
-                      AND COALESCE(dgc.state, '') != ''
-                      AND TRIM(COALESCE(dgc.query_text, '')) NOT LIKE 'website%'
-                      AND TRIM(COALESCE(dgc.query_text, '')) NOT LIKE 'photon:%'
-                      AND TRIM(COALESCE(dgc.query_text, '')) NOT LIKE 'toyota.com:%'
-                    )
                   )
             )
         )
@@ -1293,6 +1321,8 @@ def store_dealer_geo_coordinates(
     """Persist known coordinates (e.g. from OEM dealer API) without external geocoding."""
     ensure_dealer_geo_cache_table(conn)
     query = query_text or f"{city}, {state} {postal_code}".strip(", ")
+    if query and not query.startswith("oem:"):
+        query = f"oem:{query}"
     _store_dealer_geo(
         conn,
         dealer_cd,

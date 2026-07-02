@@ -280,13 +280,28 @@ def dealer_vehicle_refresh_params_from_payload(
     }
 
 
+def _ingest_location_defaults(make_slug: str) -> tuple[str, int, int]:
+    if make_slug == "mazda":
+        return "95101", 50, 100
+    return "95132", 500, 250
+
+
 def ingest_params_from_payload(payload: dict, *, all_models: bool, model_codes, make_slug: str) -> dict:
+    default_zip, default_distance, default_page_size = _ingest_location_defaults(make_slug)
+    zip_code = str(payload.get("zip_code") or "").strip() or default_zip
+    distance_raw = payload.get("distance")
+    distance = int(distance_raw) if distance_raw not in (None, "") else 0
+    if distance <= 0:
+        distance = default_distance
+    page_size = int(payload.get("page_size") or 0)
+    if page_size <= 0:
+        page_size = default_page_size
     nationwide_raw = payload.get("nationwide")
-    nationwide = True if nationwide_raw is None else bool(nationwide_raw)
+    nationwide = False if nationwide_raw is None else bool(nationwide_raw)
     return {
-        "zip_code": str(payload.get("zip_code") or ""),
-        "distance": int(payload.get("distance") or 0),
-        "page_size": int(payload.get("page_size") or 0),
+        "zip_code": zip_code,
+        "distance": distance,
+        "page_size": page_size,
         "all_models": all_models,
         "model_codes": model_codes or [],
         "make": make_slug,

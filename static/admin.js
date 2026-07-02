@@ -57,7 +57,10 @@ function summarizeParams(run) {
     const models = params.all_models
       ? "all models"
       : `${(params.model_codes || []).length} model(s)`;
-    return `ZIP ${params.zip_code ?? "—"}, ${params.distance ?? "—"} mi, ${models}`;
+    const scope = params.nationwide
+      ? "nationwide"
+      : `ZIP ${params.zip_code ?? "—"}, ${params.distance ?? "—"} mi`;
+    return `${scope}, ${models}`;
   }
   if (run.job_type === "geocode") {
     const limit = params.limit == null ? "all remaining" : `${params.limit} max`;
@@ -365,7 +368,10 @@ function setIngestPanelLoading(active) {
   }
 }
 
-function getIngestSettingsPayload() {
+function getIngestSettingsPayload(options) {
+  if (window.VIT?.getIngestSettingsPayload) {
+    return window.VIT.getIngestSettingsPayload(options);
+  }
   const defaults = window.VIT?.getIngestDefaults?.(window.VIT?.currentMake) || {
     zip: "95132",
     distance: 500,
@@ -398,11 +404,12 @@ function applyMakeUi() {
           : "Run ingest to refresh inventory for this make.";
   }
 
+  window.VIT?.hydrateIngestLocationFields?.();
   const defaults = window.VIT.getIngestDefaults(info.slug);
   const zipEl = qs("ingest-zip-code");
   const distEl = qs("ingest-distance");
-  if (zipEl && !zipEl.value) zipEl.value = defaults.zip;
-  if (distEl && !distEl.value) distEl.value = String(defaults.distance);
+  if (zipEl && !zipEl.value.trim()) zipEl.value = defaults.zip;
+  if (distEl && !distEl.value.trim()) distEl.value = String(defaults.distance);
 
   const showCatalogSync = Boolean(info.supports_catalog_sync);
   const showModelSelection = Boolean(info.requires_model_selection);
@@ -619,6 +626,8 @@ function renderIngestProgress(status) {
   bar.value = pct;
 
   const parts = [];
+  const scope = window.VIT?.formatIngestScope?.(status);
+  if (scope) parts.push(scope);
   if (status.current_model_title || status.current_model) {
     const isDealerZipRefresh = /^\d{5}$/.test(String(status.current_model || ""));
     if (isDealerZipRefresh) {
@@ -755,7 +764,7 @@ async function syncModelCatalog() {
   try {
     await fetchJson("/api/catalog/sync", {
       method: "POST",
-      body: JSON.stringify(getIngestSettingsPayload()),
+      body: JSON.stringify(getIngestSettingsPayload({ forCatalogSync: true })),
     });
     await loadCatalogModels();
     await pollAdminState();
@@ -780,6 +789,7 @@ async function startDealerVehicleRefresh({ allModels = false } = {}) {
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
     status: "queued",
+    job_type: "dealer_vehicle_refresh",
     message: "Starting dealer ZIP vehicle refresh...",
     percent: 0,
   });
@@ -801,11 +811,15 @@ async function startIngest({ allModels = false } = {}) {
     }
   }
 
+  window.VIT?.persistSearchLocation?.(payload.zip_code, payload.distance);
   setIngestUiRunning(true);
   qs("ingest-progress-wrap")?.classList.remove("hidden");
   renderIngestProgress({
     status: "queued",
-    message: "Starting ingest...",
+    job_type: "ingest",
+    zip_code: payload.zip_code,
+    distance: payload.distance,
+    message: `Queued ingest near ZIP ${payload.zip_code} (${payload.distance} mi)...`,
     percent: 0,
   });
 

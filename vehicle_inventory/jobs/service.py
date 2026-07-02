@@ -135,9 +135,12 @@ class JobService:
                 {
                     "status": "queued",
                     "phase": "queued",
-                    "message": "Queued ingest job...",
+                    "message": f"Queued ingest near ZIP {params['zip_code']} ({params['distance']} mi)...",
                     "job_run_id": job_run_id,
                     "job_type": "ingest",
+                    "zip_code": params["zip_code"],
+                    "distance": params["distance"],
+                    "nationwide": params.get("nationwide"),
                     "percent": 0.0,
                     "make": self.make.slug,
                 },
@@ -196,9 +199,10 @@ class JobService:
                 {
                     "status": "queued",
                     "phase": "queued",
-                    "message": "Queued dealer vehicle refresh...",
+                    "message": "Queued dealer vehicle refresh (1 mi per dealer ZIP)...",
                     "job_run_id": job_run_id,
                     "job_type": "dealer_vehicle_refresh",
+                    "distance": params.get("distance", 1),
                     "percent": 0.0,
                     "make": self.make.slug,
                 },
@@ -289,7 +293,7 @@ class JobService:
         payload = progress if isinstance(progress, dict) else progress.to_dict()
         payload.setdefault("make", self.make.slug)
         existing = self.ingest_status()
-        for key in ("job_run_id", "job_type"):
+        for key in ("job_run_id", "job_type", "zip_code", "distance", "page_size", "nationwide"):
             if not payload.get(key) and existing.get(key):
                 payload[key] = existing[key]
         self._set_live(self._live_ingest_key, payload)

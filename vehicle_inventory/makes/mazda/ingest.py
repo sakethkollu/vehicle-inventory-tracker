@@ -26,7 +26,7 @@ from vehicle_inventory.makes.mazda.dealers import (
     list_dealer_refresh_zips,
     mazda_discovery_seed_zips,
 )
-from vehicle_inventory.geo.dealer_geo import ensure_dealer_geo_cache_table, store_dealer_geo_coordinates
+from vehicle_inventory.geo.dealer_geo import ensure_dealer_geo_cache_table, geocode_postal_code, normalize_state_code, store_dealer_geo_coordinates
 from vehicle_inventory.makes.mazda.colors import resolve_exterior_color_hex
 from vehicle_inventory.makes.mazda.media import classify_mazda_media, normalize_mazda_media_href
 from vehicle_inventory.makes.mazda.models import (
@@ -195,7 +195,7 @@ def persist_mazda_dealers(db: InventoryDb, dealers: List[MazdaDealer], ts: str) 
             },
             ts,
         )
-        if dealer.lat or dealer.lon:
+        if (dealer.lat or dealer.lon) and not (dealer.lat == 0.0 and dealer.lon == 0.0):
             store_dealer_geo_coordinates(
                 db.conn,
                 str(dealer.dealer_id),
@@ -206,6 +206,20 @@ def persist_mazda_dealers(db: InventoryDb, dealers: List[MazdaDealer], ts: str) 
                 state=dealer.state,
                 query_text=f"{dealer.name}, {dealer.city}, {dealer.state} {dealer.zip_code}",
             )
+        elif dealer.zip_code:
+            state = normalize_state_code(dealer.state) or (dealer.state or "").strip()
+            coords = geocode_postal_code(dealer.zip_code)
+            if coords and state:
+                store_dealer_geo_coordinates(
+                    db.conn,
+                    str(dealer.dealer_id),
+                    latitude=coords[0],
+                    longitude=coords[1],
+                    postal_code=dealer.zip_code,
+                    city=dealer.city,
+                    state=state,
+                    query_text=f"{dealer.name}, {dealer.city}, {state} {dealer.zip_code}",
+                )
 
 
 def _resolve_mazda_dealers(

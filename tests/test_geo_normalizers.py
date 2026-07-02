@@ -3,7 +3,14 @@ from vehicle_inventory.geo.dealer_geo import (
     normalize_state_code,
     normalize_us_zip,
     state_label,
+    _is_preferred_geo_query,
 )
+
+
+def test_is_preferred_geo_query_includes_oem():
+    assert _is_preferred_geo_query("oem:Mazda of Irvine, CA 92618") is True
+    assert _is_preferred_geo_query("website:https://example.com") is True
+    assert _is_preferred_geo_query("95132, Irvine, CA") is False
 
 
 def test_normalize_us_zip():
