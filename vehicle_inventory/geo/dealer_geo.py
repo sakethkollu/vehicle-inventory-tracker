@@ -1495,16 +1495,22 @@ def dealer_display_distance_sql(
     *,
     vr_alias: str = "vr",
 ) -> str:
-    """Prefer OEM ingest distance for labels; geocoded miles are fallback only."""
+    """Prefer real distance from the search ZIP; OEM ingest distance is a fallback only.
+
+    ``vr.distance`` is recorded relative to the ZIP the ingest was queried from
+    (e.g. Mazda's per-dealer-ZIP refresh gives every row ``distance = 1``), so it
+    is misleading when the user is searching from somewhere else. We only use it
+    when the dealer has no usable geocoded coordinates.
+    """
     return f"""
         COALESCE(
-            MIN({vr_alias}.distance),
             MIN(
                 CASE
                     WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
                         ({haversine_miles_expr})
                 END
-            )
+            ),
+            MIN({vr_alias}.distance)
         ) AS distance_miles
     """
 
