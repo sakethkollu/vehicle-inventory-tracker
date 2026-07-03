@@ -16,10 +16,27 @@ from vehicle_inventory.makes.mazda.models import compose_mazda_model_marketing_n
 from vehicle_inventory.makes.mazda.stage import resolve_mazda_allocation_stage
 
 MAZDA_ORIGIN = "https://www.mazdausa.com"
+MAZDA_INVENTORY_RESULTS_URL = f"{MAZDA_ORIGIN}/shopping-tools/inventory/results"
 DEALER_AJAX = f"{MAZDA_ORIGIN}/handlers/dealer.ajax"
 ZIP_AJAX = f"{MAZDA_ORIGIN}/handlers/zip.ajax"
 INVENTORY_SEARCH = f"{MAZDA_ORIGIN}/api/inventorysearch"
 VEHICLE_DETAIL = f"{MAZDA_ORIGIN}/api/inv/detail"
+
+
+def compose_mazda_listing_url(*, details_url: str = "", vin: str = "") -> str:
+    """Build a shopper-facing Mazda inventory listing URL."""
+    path = str(details_url or "").strip()
+    if path:
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+        if path.startswith("/"):
+            return f"{MAZDA_ORIGIN}{path}"
+        return f"{MAZDA_ORIGIN}/{path}"
+    vin_value = str(vin or "").strip().upper()
+    if vin_value:
+        query = urllib.parse.urlencode({"vin": vin_value})
+        return f"{MAZDA_INVENTORY_RESULTS_URL}?{query}"
+    return ""
 
 
 @dataclass
@@ -584,11 +601,8 @@ class MazdaInventoryClient:
 
     @staticmethod
     def detail_referer(vehicle: MazdaVehicle) -> str:
-        details_url = str(vehicle.details_url or "").strip()
-        if not details_url:
-            return MAZDA_INVENTORY_URL
-        if details_url.startswith("http://") or details_url.startswith("https://"):
-            return details_url
-        if details_url.startswith("/"):
-            return f"{MAZDA_ORIGIN}{details_url}"
-        return f"{MAZDA_ORIGIN}/{details_url}"
+        listing_url = compose_mazda_listing_url(
+            details_url=vehicle.details_url,
+            vin=vehicle.vin,
+        )
+        return listing_url or MAZDA_INVENTORY_URL

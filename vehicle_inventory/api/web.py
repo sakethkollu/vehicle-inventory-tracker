@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session
 
 from vehicle_inventory.db.backend import open_db_connection
-from vehicle_inventory.db.run_scope import refresh_series_latest_runs
+from vehicle_inventory.db.run_scope import repair_series_latest_runs
 
 from vehicle_inventory.makes.context import resolve_make_slug, set_session_make
 from vehicle_inventory.makes.registry import get_make_adapter, get_make_profile, list_makes
@@ -79,7 +79,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             )
             try:
                 db.initialize()
-                refresh_series_latest_runs(db.conn, force=True)
+                repair_series_latest_runs(db.conn)
             finally:
                 db.close()
 
@@ -405,7 +405,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     def inventory_export():
         filters = parse_inventory_filters(request.args)
         payload = inventory_response(filters, paginate=False)
-        csv_text = build_inventory_csv(payload.get("items") or [])
+        csv_text = build_inventory_csv(payload.get("items") or [], make_slug=make.slug)
         run_id = payload.get("latest_run_id") or "export"
         series = "-".join(filters.series_codes) if filters.series_codes else "all"
         if len(series) > 48:

@@ -955,6 +955,7 @@ def build_analytics_payload(
 CSV_EXPORT_COLUMNS: List[Tuple[str, str, Optional[Callable[[Dict], object]]]] = [
     ("vin", "VIN", None),
     ("stock_num", "Stock #", None),
+    ("vdp_url", "Listing", None),
     ("year", "Year", None),
     ("marketing_series", "Series", None),
     ("series_code", "Series Code", None),
@@ -974,7 +975,6 @@ CSV_EXPORT_COLUMNS: List[Tuple[str, str, Optional[Callable[[Dict], object]]]] = 
     ("exterior_color_name", "Exterior Color", None),
     ("interior_color_name", "Interior Color", None),
     ("inventory_status", "Inventory Status", None),
-    ("vdp_url", "Listing URL", None),
     ("dealer_website", "Dealer Website", None),
     ("last_seen_at", "Last Seen", None),
     ("options", "Options", lambda item: _format_options_for_csv(item.get("options") or [])),
@@ -1004,7 +1004,18 @@ def _format_options_for_csv(options: List[Dict]) -> str:
     return " | ".join(part for part in parts if part)
 
 
-def build_inventory_csv(items: List[Dict]) -> str:
+def _csv_listing_url(item: Dict, *, make_slug: Optional[str] = None) -> str:
+    url = str(item.get("vdp_url") or "").strip()
+    if url:
+        return url
+    if make_slug == "mazda":
+        from vehicle_inventory.makes.mazda.client import compose_mazda_listing_url
+
+        return compose_mazda_listing_url(vin=str(item.get("vin") or ""))
+    return ""
+
+
+def build_inventory_csv(items: List[Dict], *, make_slug: Optional[str] = None) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([label for _, label, _ in CSV_EXPORT_COLUMNS])
@@ -1013,6 +1024,8 @@ def build_inventory_csv(items: List[Dict]) -> str:
         for key, _, formatter in CSV_EXPORT_COLUMNS:
             if formatter is not None:
                 value = formatter(item)
+            elif key == "vdp_url":
+                value = _csv_listing_url(item, make_slug=make_slug)
             else:
                 value = item.get(key)
             if value is None:

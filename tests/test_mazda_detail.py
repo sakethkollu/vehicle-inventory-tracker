@@ -103,3 +103,24 @@ def test_detail_referer_builds_absolute_inventory_url():
     referer = MazdaInventoryClient.detail_referer(vehicle)
     assert referer.startswith("https://www.mazdausa.com/")
     assert "cx-50-hybrid" in referer
+
+
+def test_compose_mazda_listing_url_from_details_path():
+    from vehicle_inventory.makes.mazda.client import compose_mazda_listing_url
+
+    url = compose_mazda_listing_url(
+        details_url="/shopping-tools/inventory/new/2026-mazda-cx-50-hybrid?vin=7MMVAABW6TN178738"
+    )
+    assert url == (
+        "https://www.mazdausa.com/shopping-tools/inventory/new/"
+        "2026-mazda-cx-50-hybrid?vin=7MMVAABW6TN178738"
+    )
+
+
+def test_compose_mazda_listing_url_falls_back_to_vin_search():
+    from vehicle_inventory.makes.mazda.client import compose_mazda_listing_url
+
+    url = compose_mazda_listing_url(vin="7MMVAABW6TN178738")
+    assert url == (
+        "https://www.mazdausa.com/shopping-tools/inventory/results?vin=7MMVAABW6TN178738"
+    )

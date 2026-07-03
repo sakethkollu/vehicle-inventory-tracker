@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional
 
 from vehicle_inventory.db import InventoryDb, utc_now
 from vehicle_inventory.db.backend import run_transaction_with_retry
-from vehicle_inventory.db.run_scope import pin_series_latest_run, refresh_series_latest_runs
+from vehicle_inventory.db.run_scope import finalize_ingest_runs, repair_series_latest_runs
 from vehicle_inventory.ingest.progress import IngestProgress, ProgressCallback, emit_progress
 from vehicle_inventory.makes.mazda.client import (
     MAZDA_ORIGIN,
@@ -20,6 +20,7 @@ from vehicle_inventory.makes.mazda.client import (
     MazdaDealer,
     MazdaInventoryClient,
     MazdaVehicle,
+    compose_mazda_listing_url,
 )
 from vehicle_inventory.makes.mazda.dealers import (
     MAZDA_DISCOVERY_MAX_DISTANCE,
@@ -450,16 +451,34 @@ def _persist_page_batch(
                 catalog_index=catalog_index,
                 ts=ts,
             )
-        pin_series_latest_run(db.conn, series_code, run_id)
 
     run_transaction_with_retry(db.conn, write_page)
 
 
-def _finalize_ingest_runs(db: InventoryDb) -> None:
-    run_transaction_with_retry(
-        db.conn,
-        lambda: refresh_series_latest_runs(db.conn, force=True),
-    )
+def _commit_finalize_ingest_runs(
+    db: InventoryDb,
+    *,
+    run_id: int,
+    series_codes: List[str],
+    run_source: str,
+) -> None:
+    def write_finalize() -> None:
+        finalize_ingest_runs(
+            db.conn,
+            run_id=run_id,
+            series_codes=series_codes,
+            run_source=run_source,
+        )
+
+    run_transaction_with_retry(db.conn, write_finalize)
+
+
+def _repair_latest_runs_after_failure(db: InventoryDb) -> None:
+    try:
+        repair_series_latest_runs(db.conn)
+        db.commit()
+    except Exception as exc:
+        print(f"[mazda] failed to repair series latest runs after ingest error: {exc}", flush=True)
 
 
 def _pagination_should_stop(
@@ -513,10 +532,9 @@ def _vehicle_payload(vehicle: MazdaVehicle) -> dict:
         "extColor": ext_color,
         "intColor": {"marketingName": vehicle.interior_color},
         "dealerCd": str(vehicle.dealer_id) if vehicle.dealer_id is not None else None,
-        "vdpUrl": (
-            f"{MAZDA_ORIGIN}{vehicle.details_url}"
-            if vehicle.details_url.startswith("/")
-            else vehicle.details_url
+        "vdpUrl": compose_mazda_listing_url(
+            details_url=vehicle.details_url,
+            vin=vehicle.vin,
         ),
         "price": {
             "advertizedPrice": vehicle.price,
@@ -560,7 +578,7 @@ def _persist_vehicle(
     settings: MazdaIngestSettings,
     catalog_index: Dict[str, str],
     ts: str,
-) -> None:
+) -> str:
     series_code = resolve_mazda_series_code(
         carline=vehicle.carline,
         model_name=vehicle.model_name,
@@ -607,6 +625,7 @@ def _persist_vehicle(
             db.link_vehicle_media(vehicle.vin, media_id, ts)
     if image_url:
         db.patch_model_catalog_image_if_missing(series_code, image_url, ts)
+    return series_code
 
 
 def run_mazda_ingest(
@@ -620,6 +639,9 @@ def run_mazda_ingest(
     db = InventoryDb(database_url=settings.database_url, schema_path=settings.schema_path)
     db.initialize()
     ts = utc_now()
+    run_id: Optional[int] = None
+    carlines_to_fetch: List[str] = []
+    finalized = False
 
     try:
         emit_progress(progress, progress_callback, phase="session", message="Refreshing Mazda session cookies...")
@@ -793,7 +815,13 @@ def run_mazda_ingest(
 
             progress.completed_models.append(carline)
 
-        _finalize_ingest_runs(db)
+        _commit_finalize_ingest_runs(
+            db,
+            run_id=run_id,
+            series_codes=carlines_to_fetch,
+            run_source="mazda_rest",
+        )
+        finalized = True
 
         from vehicle_inventory.jobs.service import get_job_service
 
@@ -823,6 +851,8 @@ def run_mazda_ingest(
             pass
         raise
     finally:
+        if not finalized:
+            _repair_latest_runs_after_failure(db)
         db.close()
 
 
@@ -845,6 +875,9 @@ def run_mazda_dealer_vehicle_refresh(
     vehicles_persisted = 0
     zips_processed = 0
     zips_with_inventory = 0
+    run_id: Optional[int] = None
+    carlines_to_fetch: List[str] = []
+    finalized = False
 
     try:
         dealer_zips = list_dealer_refresh_zips(db.conn)
@@ -1043,7 +1076,13 @@ def run_mazda_dealer_vehicle_refresh(
             if vehicles_persisted > zip_saved_before:
                 zips_with_inventory += 1
 
-        _finalize_ingest_runs(db)
+        _commit_finalize_ingest_runs(
+            db,
+            run_id=run_id,
+            series_codes=carlines_to_fetch,
+            run_source="mazda_dealer_zip_refresh",
+        )
+        finalized = True
 
         from vehicle_inventory.jobs.service import get_job_service
 
@@ -1076,4 +1115,6 @@ def run_mazda_dealer_vehicle_refresh(
             pass
         raise
     finally:
+        if not finalized:
+            _repair_latest_runs_after_failure(db)
         db.close()

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from vehicle_inventory.db import InventoryDb, utc_now
-from vehicle_inventory.db.run_scope import refresh_series_latest_runs
+from vehicle_inventory.db.run_scope import refresh_series_latest_runs, repair_series_latest_runs
 from vehicle_inventory.ingest.progress import IngestProgress, ProgressCallback, emit_progress
 from vehicle_inventory.makes.toyota.client import (
     PageFetchProgress,
@@ -197,6 +197,8 @@ def persist_run(
     series_code: str,
     archive_dir: Optional[str],
     vehicles: List[Dict],
+    *,
+    mark_missing_inactive: bool = True,
 ) -> int:
     db = InventoryDb(database_url=database_url, schema_path=schema_path)
     db.initialize()
@@ -220,7 +222,12 @@ def persist_run(
             processed += 1
             if processed == total or processed % checkpoint == 0:
                 print(f"[db] processed {processed}/{total}", flush=True)
-        inactive_count = db.mark_inactive_not_seen(run_id=run_id, series_codes=[series_code], ts=ts)
+        inactive_count = 0
+        if mark_missing_inactive:
+            inactive_count = db.mark_inactive_not_seen(
+                run_id=run_id, series_codes=[series_code], ts=ts
+            )
+        refresh_series_latest_runs(db.conn, force=True)
         db.commit()
     except Exception:
         db.rollback()
@@ -290,6 +297,7 @@ def ingest_single_model(
         series_code=model.model_code,
         archive_dir=None,
         vehicles=fetch_result.vehicles,
+        mark_missing_inactive=not fetch_result.partial,
     )
 
 
@@ -343,12 +351,18 @@ def _ingest_single_model_streaming(
         progress_callback=persist_page,
     )
 
-    inactive_count = db.mark_inactive_not_seen(
-        run_id=run_id,
-        series_codes=[model.model_code],
-        ts=queried_at,
-    )
-    from vehicle_inventory.db.run_scope import refresh_series_latest_runs
+    inactive_count = 0
+    if not fetch_result.partial:
+        inactive_count = db.mark_inactive_not_seen(
+            run_id=run_id,
+            series_codes=[model.model_code],
+            ts=queried_at,
+        )
+    else:
+        print(
+            f"Warning: skipping mark-inactive for {model.model_code} because fetch was partial.",
+            flush=True,
+        )
 
     refresh_series_latest_runs(db.conn, force=True)
     db.commit()
@@ -491,6 +505,17 @@ def run_live_ingest(
             else:
                 geocode_message = "Dealer geocoding already running in background."
             emit_progress(progress, progress_callback, message=geocode_message)
+    except Exception:
+        if db is not None and settings.stream_to_db:
+            try:
+                repair_series_latest_runs(db.conn)
+                db.commit()
+            except Exception as exc:
+                print(
+                    f"[toyota] failed to repair series latest runs after ingest error: {exc}",
+                    flush=True,
+                )
+        raise
     finally:
         if db is not None:
             db.close()

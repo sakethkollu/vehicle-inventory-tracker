@@ -96,3 +96,26 @@ def test_compute_histogram():
     assert hist["min"] == 10
     assert hist["max"] == 60
     assert compute_histogram([1, 2]) is None
+
+
+def test_build_inventory_csv_includes_mazda_listing_link():
+    from vehicle_inventory.api.inventory import build_inventory_csv
+
+    csv_text = build_inventory_csv(
+        [
+            {
+                "vin": "7MMVAABW6TN178738",
+                "vdp_url": "",
+            },
+            {
+                "vin": "JM1EXISTING",
+                "vdp_url": "https://www.mazdausa.com/shopping-tools/inventory/new/cx-5",
+            },
+        ],
+        make_slug="mazda",
+    )
+    lines = csv_text.strip().splitlines()
+    assert "Listing" in lines[0]
+    assert "7MMVAABW6TN178738" in lines[1]
+    assert "shopping-tools/inventory/results?vin=7MMVAABW6TN178738" in lines[1]
+    assert "https://www.mazdausa.com/shopping-tools/inventory/new/cx-5" in lines[2]
