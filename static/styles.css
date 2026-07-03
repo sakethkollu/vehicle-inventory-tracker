@@ -2223,6 +2223,65 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   min-width: 0;
 }
 
+.admin-geocode-failed {
+  margin-top: 12px;
+}
+
+.admin-geocode-failed-details {
+  background: #2b2b2b;
+  border: 1px solid #4a4f54;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.admin-geocode-failed-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #f4b8a1;
+  list-style: revert;
+}
+
+.admin-geocode-failed-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.admin-geocode-failed-table th,
+.admin-geocode-failed-table td {
+  border-bottom: 1px solid #3a3f44;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-geocode-failed-table th {
+  color: #d0d3d7;
+  font-weight: 600;
+  background: #232629;
+}
+
+.admin-geocode-failed-table td {
+  color: #cfd2d6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.admin-geocode-failed-table code {
+  background: #1e2124;
+  border-radius: 4px;
+  color: #e6c07b;
+  display: inline-block;
+  font-size: 11px;
+  margin: 1px 0;
+  padding: 1px 6px;
+}
+
+.admin-geocode-failed-query {
+  max-width: 360px;
+}
+
 .admin-worker-card {
   background: #2b2b2b;
   border: 1px solid #4a4f54;

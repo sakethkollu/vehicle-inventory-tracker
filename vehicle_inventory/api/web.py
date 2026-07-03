@@ -28,6 +28,7 @@ from vehicle_inventory.geo.dealer_geo import (
     clear_dealer_geo_cache,
     dealer_geo_stats,
     geocode_all_dealers,
+    list_failed_geocode_dealers,
     reset_oem_provisional_geo,
     reverse_geocode_postal_code,
 )
@@ -216,6 +217,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         conn = get_conn(readonly=True)
         try:
             geocode_payload = dict(dealer_geo_stats(conn))
+            geocode_payload["failed_dealers"] = list_failed_geocode_dealers(conn, limit=100)
         finally:
             conn.close()
         job = request_jobs().geocode_status()

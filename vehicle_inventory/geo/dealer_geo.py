@@ -1469,6 +1469,45 @@ def geocode_missing_dealers(conn: DbConnection, limit: int = 20) -> int:
     return int(result.get("batch_geocoded", 0))
 
 
+def list_failed_geocode_dealers(
+    conn: DbConnection, *, limit: int = 100
+) -> List[Dict[str, object]]:
+    """Return dealers whose most recent geocode attempt did not resolve coords.
+
+    A failed row is a ``dealer_geo_cache`` entry with NULL latitude/longitude
+    (``_store_dealer_geo`` still records the attempted queries so we can
+    display them).
+    """
+    ensure_dealer_geo_cache_table(conn)
+    limit_val = max(1, min(int(limit or 100), 500))
+    rows = conn.execute(
+        """
+        SELECT
+            d.dealer_cd,
+            COALESCE(d.dealer_marketing_name, d.dealer_cd) AS dealer_name,
+            d.dealer_website,
+            dgc.query_text,
+            dgc.geocoded_at
+        FROM dealers d
+        JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
+        WHERE dgc.latitude IS NULL OR dgc.longitude IS NULL
+        ORDER BY dgc.geocoded_at DESC, d.dealer_cd
+        LIMIT ?
+        """,
+        (limit_val,),
+    ).fetchall()
+    return [
+        {
+            "dealer_cd": str(row["dealer_cd"]),
+            "dealer_name": str(row["dealer_name"] or row["dealer_cd"]),
+            "dealer_website": str(row["dealer_website"] or ""),
+            "query_text": str(row["query_text"] or ""),
+            "geocoded_at": str(row["geocoded_at"] or ""),
+        }
+        for row in rows
+    ]
+
+
 def reset_oem_provisional_geo(conn: DbConnection) -> int:
     """Delete dealer_geo_cache rows whose coordinates came from OEM dealer sync.
 

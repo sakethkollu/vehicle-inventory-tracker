@@ -1077,6 +1077,8 @@ function renderOverview(payload) {
     cancelBtn.disabled = !geocodeRunning;
   }
 
+  renderFailedGeocodeDealers(geoStats.failed_dealers || []);
+
   renderJobSummary(payload.summary || {});
   lastJobRuns = payload.recent_runs || [];
   lastLiveProgressMap = buildLiveProgressMap(payload);
@@ -1085,6 +1087,59 @@ function renderOverview(payload) {
   if (updated) {
     updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
   }
+}
+
+function formatFailedGeocodeQuery(raw) {
+  if (!raw) return "<em class=\"muted\">no queries recorded</em>";
+  const parts = String(raw)
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) return "<em class=\"muted\">no queries recorded</em>";
+  return parts.map((q) => `<code>${escapeHtml(q)}</code>`).join("<br>");
+}
+
+function renderFailedGeocodeDealers(rows) {
+  const container = qs("admin-geocode-failed");
+  if (!container) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+  const bodyRows = rows
+    .map((row) => {
+      const website = row.dealer_website
+        ? `<a href="${escapeHtml(row.dealer_website)}" target="_blank" rel="noreferrer noopener">${escapeHtml(row.dealer_website)}</a>`
+        : "<span class=\"muted\">—</span>";
+      const when = row.geocoded_at
+        ? escapeHtml(row.geocoded_at)
+        : "<span class=\"muted\">—</span>";
+      return `<tr>
+          <td>${escapeHtml(row.dealer_cd)}</td>
+          <td>${escapeHtml(row.dealer_name)}</td>
+          <td>${website}</td>
+          <td class="admin-geocode-failed-query">${formatFailedGeocodeQuery(row.query_text)}</td>
+          <td>${when}</td>
+        </tr>`;
+    })
+    .join("");
+  container.innerHTML = `
+    <details class="admin-geocode-failed-details" open>
+      <summary>Failed geocode attempts (${rows.length.toLocaleString()})</summary>
+      <table class="admin-geocode-failed-table">
+        <thead>
+          <tr>
+            <th>Dealer code</th>
+            <th>Name</th>
+            <th>Website</th>
+            <th>Queries tried</th>
+            <th>Last attempt</th>
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </details>
+  `;
 }
 
 function renderJobSummary(summary) {

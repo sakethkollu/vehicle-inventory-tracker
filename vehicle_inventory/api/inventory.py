@@ -144,9 +144,12 @@ def _distance_select_sql(
     if search_coords is None:
         return "NULL", []
     miles = haversine_miles_sql("?", "?")
+    # Not wrapped in MIN(): the base query is per-vehicle (not aggregated) and
+    # any GROUP BY variant already includes dgc.latitude/longitude, so a plain
+    # CASE expression is well defined in both cases.
     expr = (
-        f"MIN(CASE WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL "
-        f"THEN ({miles}) END)"
+        f"CASE WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL "
+        f"THEN ({miles}) END"
     )
     lat, lng = search_coords
     return expr, [lat, lng, lat]
