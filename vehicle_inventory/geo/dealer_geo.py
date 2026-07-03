@@ -1504,10 +1504,6 @@ def _haversine_miles_exists_sql(vr_alias: str) -> str:
     """
 
 
-def _run_distance_bound_sql(vr_alias: str, op: str) -> str:
-    return f"{vr_alias}.distance IS NOT NULL AND {vr_alias}.distance {op} ?"
-
-
 MAX_DEALER_GEO_DISPLAY_MILES = 500
 
 
@@ -1552,16 +1548,12 @@ def _append_distance_max_filter(
     distance_max: int,
     search_coords: Optional[Tuple[float, float]] = None,
 ) -> None:
-    if search_coords:
-        lat, lng = search_coords
-        haversine = _haversine_miles_exists_sql(vr_alias).format(op="<=")
-        where.append(f"({haversine})")
-        params.extend([lat, lng, lat, int(distance_max)])
+    if not search_coords:
         return
-    # No search coordinates available: fall back to OEM ingest distance so at
-    # least stale filters still return something.
-    where.append(_run_distance_bound_sql(vr_alias, "<="))
-    params.append(int(distance_max))
+    lat, lng = search_coords
+    haversine = _haversine_miles_exists_sql(vr_alias).format(op="<=")
+    where.append(f"({haversine})")
+    params.extend([lat, lng, lat, int(distance_max)])
 
 
 def _append_distance_min_filter(
@@ -1572,14 +1564,12 @@ def _append_distance_min_filter(
     distance_min: int,
     search_coords: Optional[Tuple[float, float]] = None,
 ) -> None:
-    if search_coords:
-        lat, lng = search_coords
-        haversine = _haversine_miles_exists_sql(vr_alias).format(op=">=")
-        where.append(f"({haversine})")
-        params.extend([lat, lng, lat, int(distance_min)])
+    if not search_coords:
         return
-    where.append(_run_distance_bound_sql(vr_alias, ">="))
-    params.append(int(distance_min))
+    lat, lng = search_coords
+    haversine = _haversine_miles_exists_sql(vr_alias).format(op=">=")
+    where.append(f"({haversine})")
+    params.extend([lat, lng, lat, int(distance_min)])
 
 
 def append_run_location_filters(
@@ -1595,40 +1585,23 @@ def append_run_location_filters(
     normalized_states = expand_state_filter_values(state_codes or []) if state_codes else []
     apply_distance = not normalized_states
 
-    if apply_distance:
+    if apply_distance and (distance_max is not None or distance_min is not None):
         normalized_zip = normalize_us_zip(search_zip or "")
         search_coords = geocode_postal_code(normalized_zip) if normalized_zip else None
 
-        if normalized_zip:
-            if distance_max is not None or distance_min is not None:
-                if search_coords is None:
-                    logger.warning(
-                        "Search ZIP %s could not be geocoded; using OEM distance only",
-                        normalized_zip,
-                    )
-                if distance_max is not None:
-                    _append_distance_max_filter(
-                        where,
-                        params,
-                        vr_alias=vr_alias,
-                        distance_max=int(distance_max),
-                        search_coords=search_coords,
-                    )
-                if distance_min is not None:
-                    _append_distance_min_filter(
-                        where,
-                        params,
-                        vr_alias=vr_alias,
-                        distance_min=int(distance_min),
-                        search_coords=search_coords,
-                    )
-        elif distance_max is not None or distance_min is not None:
+        if search_coords is None:
+            logger.warning(
+                "Search ZIP %s could not be geocoded; skipping distance filter (OEM ingest distance is not comparable to user location).",
+                normalized_zip or "<empty>",
+            )
+        else:
             if distance_max is not None:
                 _append_distance_max_filter(
                     where,
                     params,
                     vr_alias=vr_alias,
                     distance_max=int(distance_max),
+                    search_coords=search_coords,
                 )
             if distance_min is not None:
                 _append_distance_min_filter(
@@ -1636,6 +1609,7 @@ def append_run_location_filters(
                     params,
                     vr_alias=vr_alias,
                     distance_min=int(distance_min),
+                    search_coords=search_coords,
                 )
 
     if normalized_states:

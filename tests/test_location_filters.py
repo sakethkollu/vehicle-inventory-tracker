@@ -55,7 +55,7 @@ def test_append_run_location_filters_uses_only_haversine_with_search_zip():
     assert params == [37.3352, -121.8811, 37.3352, 10]
 
 
-def test_append_run_location_filters_falls_back_to_oem_distance_when_zip_geocode_fails():
+def test_append_run_location_filters_skips_distance_when_zip_geocode_fails():
     where: list[str] = []
     params: list = []
     with patch("vehicle_inventory.geo.dealer_geo.geocode_postal_code", return_value=None):
@@ -66,8 +66,10 @@ def test_append_run_location_filters_falls_back_to_oem_distance_when_zip_geocode
             search_zip="95132",
         )
 
-    assert where == ["vr.distance IS NOT NULL AND vr.distance <= ?"]
-    assert params == [10]
+    # OEM ingest distance is not comparable to the user's location, so with no
+    # geocoded search ZIP we simply do not apply a distance filter at all.
+    assert where == []
+    assert params == []
 
 
 def test_dealer_display_distance_sql_uses_only_haversine():
