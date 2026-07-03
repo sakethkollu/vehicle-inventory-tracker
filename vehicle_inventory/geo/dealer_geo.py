@@ -1177,24 +1177,69 @@ def geocode_dealer_by_cd(
     city_hint: str = "",
     delay_sec: float = 0,
 ) -> bool:
+    result = regeocode_dealer_by_cd(conn, dealer_cd, city_hint=city_hint)
+    if delay_sec > 0:
+        time.sleep(delay_sec)
+    return bool(result.get("geocoded"))
+
+
+def regeocode_dealer_by_cd(
+    conn: DbConnection,
+    dealer_cd: str,
+    *,
+    city_hint: str = "",
+) -> Dict[str, object]:
+    """Geocode one dealer by ID and return the stored cache row."""
+    normalized_cd = str(dealer_cd or "").strip()
+    if not normalized_cd:
+        return {"ok": False, "error": "dealer_cd is required"}
+
     row = conn.execute(
         """
         SELECT dealer_cd, dealer_marketing_name, dealer_website
         FROM dealers
         WHERE dealer_cd = ?
         """,
-        (dealer_cd,),
+        (normalized_cd,),
     ).fetchone()
     if not row:
-        return False
-    dealer_name = row["dealer_marketing_name"] or dealer_cd
+        return {"ok": False, "error": f"Dealer {normalized_cd} not found"}
+
+    dealer_name = row["dealer_marketing_name"] or normalized_cd
     dealer_website = row["dealer_website"] or ""
     query, geo = geocode_dealer_record(dealer_name, dealer_website, city_hint=city_hint)
-    success = _store_dealer_geo(conn, dealer_cd, query, geo)
-    conn.commit()
-    if delay_sec > 0:
-        time.sleep(delay_sec)
-    return success
+    geocoded = _store_dealer_geo(conn, normalized_cd, query, geo)
+    commit_with_retry(conn)
+
+    cache_row = conn.execute(
+        """
+        SELECT latitude, longitude, postal_code, city, state, query_text, geocoded_at
+        FROM dealer_geo_cache
+        WHERE dealer_cd = ?
+        """,
+        (normalized_cd,),
+    ).fetchone()
+
+    payload: Dict[str, object] = {
+        "ok": True,
+        "dealer_cd": normalized_cd,
+        "dealer_name": dealer_name,
+        "dealer_website": dealer_website,
+        "geocoded": geocoded,
+        "query_text": query,
+    }
+    if cache_row:
+        payload.update(
+            {
+                "latitude": cache_row["latitude"],
+                "longitude": cache_row["longitude"],
+                "postal_code": cache_row["postal_code"],
+                "city": cache_row["city"],
+                "state": cache_row["state"],
+                "geocoded_at": cache_row["geocoded_at"],
+            }
+        )
+    return payload
 
 
 def normalize_cached_states(conn: DbConnection) -> int:
@@ -1564,7 +1609,7 @@ def dealer_display_distance_sql(
         MIN(
             CASE
                 WHEN {dealer_coords_present_sql()} THEN
-                    ({haversine_miles_expr})
+                    ROUND(({haversine_miles_expr}), 1)
             END
         ) AS distance_miles
     """

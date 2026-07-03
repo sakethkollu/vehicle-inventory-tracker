@@ -2469,6 +2469,54 @@ body[data-make="mazda"] .catalog-model-thumb-empty {
   margin-top: 12px;
 }
 
+.admin-geocode-dealer-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-geocode-dealer-form label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2c08d;
+}
+
+.admin-geocode-dealer-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-geocode-dealer-row input {
+  flex: 1 1 180px;
+  min-width: 140px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #2b2b2b;
+  color: #ddd;
+}
+
+.admin-geocode-dealer-result-ok {
+  color: #9fd89f;
+}
+
+.admin-geocode-dealer-result-fail {
+  color: #f2a2a2;
+}
+
+.admin-dealer-cd-link {
+  background: none;
+  border: none;
+  color: #8ec8ff;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .admin-status-block {
   font-size: 13px;
 }

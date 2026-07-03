@@ -10,6 +10,7 @@ from vehicle_inventory.geo.dealer_geo import (
     dealer_coords_present_sql,
     geocode_postal_code,
     haversine_to_dealer_miles_sql,
+    normalize_dealer_display_distance,
     normalize_us_zip,
 )
 from vehicle_inventory.db.run_scope import vehicle_runs_latest_join
@@ -168,7 +169,7 @@ def _distance_select_sql(
     if search_coords is None:
         return "NULL", []
     miles = haversine_to_dealer_miles_sql()
-    expr = f"CASE WHEN {dealer_coords_present_sql()} THEN ({miles}) END"
+    expr = f"CASE WHEN {dealer_coords_present_sql()} THEN ROUND(({miles}), 1) END"
     lat, lng = search_coords
     return expr, [lat, lng, lat]
 
@@ -593,7 +594,13 @@ def attach_options(conn: DbConnection, items: List[Dict]) -> None:
 
 
 def rows_to_items(rows: List[DbRow]) -> List[Dict]:
-    return [dict(row) for row in rows]
+    items: List[Dict] = []
+    for row in rows:
+        item = dict(row)
+        if item.get("distance") is not None:
+            item["distance"] = normalize_dealer_display_distance(item["distance"])
+        items.append(item)
+    return items
 
 
 def compute_numeric_stats(values: List[float]) -> Optional[Dict]:
@@ -963,7 +970,7 @@ CSV_EXPORT_COLUMNS: List[Tuple[str, str, Optional[Callable[[Dict], object]]]] = 
     ("total_msrp", "MSRP", None),
     ("base_msrp", "Base MSRP", None),
     ("wheel_options", "Wheels", None),
-    ("distance", "Distance (mi)", None),
+    ("distance", "Distance (mi)", lambda item: _format_distance_for_csv(item.get("distance"))),
     ("exterior_color_name", "Exterior Color", None),
     ("interior_color_name", "Interior Color", None),
     ("inventory_status", "Inventory Status", None),
@@ -972,6 +979,18 @@ CSV_EXPORT_COLUMNS: List[Tuple[str, str, Optional[Callable[[Dict], object]]]] = 
     ("last_seen_at", "Last Seen", None),
     ("options", "Options", lambda item: _format_options_for_csv(item.get("options") or [])),
 ]
+
+
+def _format_distance_for_csv(value: Optional[object]) -> str:
+    if value is None:
+        return ""
+    try:
+        normalized = normalize_dealer_display_distance(float(value))
+    except (TypeError, ValueError):
+        return ""
+    if normalized is None:
+        return ""
+    return f"{normalized:.1f}"
 
 
 def _format_options_for_csv(options: List[Dict]) -> str:

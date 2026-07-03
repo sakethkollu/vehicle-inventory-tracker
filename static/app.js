@@ -1236,7 +1236,7 @@ function renderDealerFilterList() {
         hasSearchZip() &&
         item.distance_miles != null &&
         Number.isFinite(Number(item.distance_miles))
-          ? ` · ${Math.round(Number(item.distance_miles)).toLocaleString()} mi`
+          ? ` · ${formatDistanceMiles(item.distance_miles)} mi`
           : "";
       const name = item.label || value;
       option.innerHTML = `<span class="dealer-filter-label">${escapeHtml(`${name} (${value})${count}${distance}`)}${!isAvailable && !isSelected ? " — unavailable" : ""}</span>`;
@@ -1379,6 +1379,14 @@ function formatDate(value) {
 function formatMoney(value) {
   if (value == null) return "-";
   return `$${Number(value).toLocaleString()}`;
+}
+
+function formatDistanceMiles(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "-";
+  return Number(value).toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 function computeNumericStats(items, field) {
@@ -1838,7 +1846,7 @@ const INVENTORY_TABLE_COLUMNS = [
     label: "Dist",
     width: "4%",
     sortable: true,
-    cell: (item) => `<td class="num">${item.distance != null ? Number(item.distance).toLocaleString() : "-"}</td>`,
+    cell: (item) => `<td class="num">${formatDistanceMiles(item.distance)}</td>`,
   },
   {
     key: "allocation_stage_code",
@@ -3444,7 +3452,7 @@ function renderDetail(data) {
     : escapeHtml(latest.dealer_marketing_name || latest.dealer_cd || "-");
 
   const distanceLine = hasSearchZip()
-    ? `<div><strong>Distance:</strong> ${escapeHtml(latest.distance ?? "-")} mi</div>`
+    ? `<div><strong>Distance:</strong> ${escapeHtml(formatDistanceMiles(latest.distance))} mi</div>`
     : "";
 
   qs("detail-latest").innerHTML = `
@@ -4975,7 +4983,7 @@ async function renderVehiclePdfPage(pdf, data, imageDataUrl, { pageNumber = 1, p
   let dy = y + 22;
   pdfLabelValue(pdf, "Name", latest.dealer_marketing_name || latest.dealer_cd || "-", col2X + 8, dy, col2W - 16);
   dy += 12;
-  pdfLabelValue(pdf, "Distance", `${latest.distance ?? "-"} mi`, col2X + 8, dy, col2W - 16);
+  pdfLabelValue(pdf, "Distance", `${formatDistanceMiles(latest.distance)} mi`, col2X + 8, dy, col2W - 16);
   dy += 12;
   if (dealerWebsite) {
     dy += pdfLabelLink(pdf, "Website", dealerWebsite, col2X + 8, dy, col2W - 16) * 11;

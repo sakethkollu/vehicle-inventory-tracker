@@ -29,6 +29,8 @@ from vehicle_inventory.geo.dealer_geo import (
     dealer_geo_stats,
     geocode_all_dealers,
     list_failed_geocode_dealers,
+    normalize_dealer_display_distance,
+    regeocode_dealer_by_cd,
     reset_oem_provisional_geo,
     reverse_geocode_postal_code,
 )
@@ -288,6 +290,23 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         finally:
             conn.close()
         return jsonify({"ok": True, "removed": removed})
+
+    @app.post("/api/admin/geocode/dealer")
+    @require_admin_api
+    def admin_geocode_dealer():
+        payload = request.get_json(silent=True) or {}
+        dealer_cd = str(payload.get("dealer_cd") or "").strip()
+        if not dealer_cd:
+            return jsonify({"ok": False, "error": "dealer_cd is required"}), 400
+        conn = get_conn()
+        try:
+            result = regeocode_dealer_by_cd(conn, dealer_cd)
+        finally:
+            conn.close()
+        if not result.get("ok"):
+            status = 404 if "not found" in str(result.get("error") or "").lower() else 400
+            return jsonify(result), status
+        return jsonify(result)
 
     @app.post("/api/admin/workers/repair")
     @require_admin_api
@@ -1114,10 +1133,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
                 media = [enrich_mazda_media_row(row) for row in media]
 
+            latest_payload = dict(latest_run) if latest_run else None
+            if latest_payload is not None and latest_payload.get("distance") is not None:
+                latest_payload["distance"] = normalize_dealer_display_distance(
+                    latest_payload["distance"]
+                )
+
             return jsonify(
                 {
                     "vehicle": dict(base),
-                    "latest": dict(latest_run) if latest_run else None,
+                    "latest": latest_payload,
                     "options": options,
                     "media": media,
                     "price_history": price_history,

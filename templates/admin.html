@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ app_title | default('Vehicle Inventory Tracker') }} Admin</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260702q" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260702regeo1" />
   </head>
   <body class="admin-page" data-make="{{ make_slug | default('toyota') }}">
     <main class="admin-shell">
@@ -134,6 +134,20 @@
             <button id="admin-geocode-reset-oem-btn" type="button" class="admin-btn admin-btn-secondary" title="Delete OEM-provisional coordinates so bulk geocoding can replace them with real ones.">Reset OEM coords</button>
             <button id="admin-geocode-clear-cache-btn" type="button" class="admin-btn admin-btn-secondary" title="Wipe every dealer_geo_cache row. Bulk geocoding will re-populate from scratch.">Clear geo cache</button>
           </div>
+          <form id="admin-geocode-dealer-form" class="admin-geocode-dealer-form">
+            <label for="admin-geocode-dealer-cd">Re-geocode one dealer</label>
+            <div class="admin-geocode-dealer-row">
+              <input
+                id="admin-geocode-dealer-cd"
+                type="text"
+                placeholder="Dealer ID"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="admin-geocode-dealer-btn" type="submit" class="admin-btn admin-btn-secondary">Re-geocode</button>
+            </div>
+            <div id="admin-geocode-dealer-result" class="admin-muted" aria-live="polite"></div>
+          </form>
           <div id="admin-geocode-failed" class="admin-geocode-failed"></div>
         </article>
       </section>
@@ -171,7 +185,7 @@
     {% if admin_enabled and authenticated %}
     <script src="/static/vit-common.js?v=20260702p"></script>
     <script src="/static/image-cache.js?v=20260702p"></script>
-    <script src="/static/admin.js?v=20260702h"></script>
+    <script src="/static/admin.js?v=20260702regeo1"></script>
     {% endif %}
   </body>
 </html>

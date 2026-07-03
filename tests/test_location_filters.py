@@ -84,5 +84,5 @@ def test_dealer_display_distance_sql_uses_only_haversine():
     # vr.distance is intentionally excluded so we never show a fake proximity
     # (e.g. Mazda's per-dealer refresh stores distance=1 for every row).
     assert "vr.distance" not in sql
-    assert normalize_dealer_display_distance(12.4) == 12.4
-    assert normalize_dealer_display_distance(5642.0) == 5642.0
+    assert normalize_dealer_display_distance(12.44) == 12.4
+    assert normalize_dealer_display_distance(5642.04) == 5642.0

@@ -1115,7 +1115,7 @@ function renderFailedGeocodeDealers(rows) {
         ? escapeHtml(row.geocoded_at)
         : "<span class=\"muted\">—</span>";
       return `<tr>
-          <td>${escapeHtml(row.dealer_cd)}</td>
+          <td><button type="button" class="admin-dealer-cd-link" data-dealer-cd="${escapeHtml(row.dealer_cd)}">${escapeHtml(row.dealer_cd)}</button></td>
           <td>${escapeHtml(row.dealer_name)}</td>
           <td>${website}</td>
           <td class="admin-geocode-failed-query">${formatFailedGeocodeQuery(row.query_text)}</td>
@@ -1305,6 +1305,62 @@ async function resetOemGeocode() {
   }
 }
 
+function formatRegeocodeResult(payload) {
+  if (!payload?.geocoded) {
+    return `No coordinates resolved for ${payload?.dealer_name || payload?.dealer_cd || "dealer"}. Check queries tried below.`;
+  }
+  const parts = [
+    `${payload.dealer_name || payload.dealer_cd}`,
+    payload.latitude != null && payload.longitude != null
+      ? `${Number(payload.latitude).toFixed(5)}, ${Number(payload.longitude).toFixed(5)}`
+      : null,
+    payload.city || payload.state || payload.postal_code
+      ? [payload.city, payload.state, payload.postal_code].filter(Boolean).join(", ")
+      : null,
+  ].filter(Boolean);
+  return `Updated: ${parts.join(" · ")}`;
+}
+
+async function regeocodeDealer() {
+  const input = qs("admin-geocode-dealer-cd");
+  const resultEl = qs("admin-geocode-dealer-result");
+  const btn = qs("admin-geocode-dealer-btn");
+  const dealerCd = input?.value.trim() || "";
+  if (!dealerCd) {
+    if (resultEl) {
+      resultEl.textContent = "Enter a dealer ID.";
+      resultEl.className = "admin-geocode-dealer-result-fail";
+    }
+    input?.focus();
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (resultEl) {
+    resultEl.textContent = `Re-geocoding ${dealerCd}…`;
+    resultEl.className = "admin-muted";
+  }
+  try {
+    const payload = await fetchJson("/api/admin/geocode/dealer", {
+      method: "POST",
+      body: JSON.stringify({ dealer_cd: dealerCd }),
+    });
+    if (resultEl) {
+      resultEl.textContent = formatRegeocodeResult(payload);
+      resultEl.className = payload.geocoded
+        ? "admin-geocode-dealer-result-ok"
+        : "admin-geocode-dealer-result-fail";
+    }
+    await refreshOverview();
+  } catch (err) {
+    if (resultEl) {
+      resultEl.textContent = err.message || "Failed to re-geocode dealer.";
+      resultEl.className = "admin-geocode-dealer-result-fail";
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function clearGeoCache() {
   const confirmed = confirm(
     "Wipe the ENTIRE dealer_geo_cache table?\n\n" +
@@ -1349,6 +1405,20 @@ async function setupAdmin() {
   });
   qs("admin-workers-repair-btn")?.addEventListener("click", () => {
     repairWorkerQueues().catch((err) => console.error(err));
+  });
+  qs("admin-geocode-dealer-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    regeocodeDealer().catch((err) => console.error(err));
+  });
+  qs("admin-geocode-failed")?.addEventListener("click", (event) => {
+    const button = event.target.closest(".admin-dealer-cd-link");
+    if (!button) return;
+    const dealerCd = button.getAttribute("data-dealer-cd") || "";
+    const input = qs("admin-geocode-dealer-cd");
+    if (input && dealerCd) {
+      input.value = dealerCd;
+      input.focus();
+    }
   });
 
   document.addEventListener("visibilitychange", () => {
