@@ -153,20 +153,6 @@ def _resolve_search_coords(search_zip: Optional[str]) -> Optional[Tuple[float, f
     return geocode_postal_code(normalized)
 
 
-def _inventory_reference_coords(filters: InventoryFilters) -> Optional[Tuple[float, float]]:
-    if not filters.search_zip:
-        return None
-    return _resolve_search_coords(filters.search_zip)
-
-
-def _scoped_distance_max(filters: InventoryFilters) -> Optional[int]:
-    return filters.distance_max if filters.filter_by_distance else None
-
-
-def _scoped_distance_min(filters: InventoryFilters) -> Optional[int]:
-    return filters.distance_min if filters.filter_by_distance else None
-
-
 def _distance_select_sql(
     search_coords: Optional[Tuple[float, float]],
 ) -> Tuple[str, List]:
@@ -217,6 +203,20 @@ class InventoryFilters:
     page_size: int = 20
     sort_key: str = "advertized_price"
     sort_dir: str = "asc"
+
+
+def _inventory_reference_coords(filters: InventoryFilters) -> Optional[Tuple[float, float]]:
+    if not filters.search_zip:
+        return None
+    return _resolve_search_coords(filters.search_zip)
+
+
+def _scoped_distance_max(filters: InventoryFilters) -> Optional[int]:
+    return filters.distance_max if filters.filter_by_distance else None
+
+
+def _scoped_distance_min(filters: InventoryFilters) -> Optional[int]:
+    return filters.distance_min if filters.filter_by_distance else None
 
 
 def _parse_series_codes(args) -> List[str]:
