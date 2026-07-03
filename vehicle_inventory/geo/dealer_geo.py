@@ -1514,24 +1514,23 @@ MAX_DEALER_GEO_DISPLAY_MILES = 500
 def dealer_display_distance_sql(
     haversine_miles_expr: str,
     *,
-    vr_alias: str = "vr",
+    vr_alias: str = "vr",  # noqa: ARG001 - kept for API compatibility
 ) -> str:
-    """Prefer real distance from the search ZIP; OEM ingest distance is a fallback only.
+    """Return the real haversine distance from the search ZIP to the dealer.
 
-    ``vr.distance`` is recorded relative to the ZIP the ingest was queried from
-    (e.g. Mazda's per-dealer-ZIP refresh gives every row ``distance = 1``), so it
-    is misleading when the user is searching from somewhere else. We only use it
-    when the dealer has no usable geocoded coordinates.
+    ``vr.distance`` (from the OEM ingest) is intentionally NOT used as a
+    fallback: it is the distance from the ingest's query ZIP to the dealer,
+    which has nothing to do with the user's current search location. Mazda's
+    per-dealer refresh even sets it to a constant ``1`` for every row. If the
+    dealer has no geocoded coordinates, the distance is left NULL and the UI
+    should hide it.
     """
     return f"""
-        COALESCE(
-            MIN(
-                CASE
-                    WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
-                        ({haversine_miles_expr})
-                END
-            ),
-            MIN({vr_alias}.distance)
+        MIN(
+            CASE
+                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
+                    ({haversine_miles_expr})
+            END
         ) AS distance_miles
     """
 
@@ -1556,10 +1555,11 @@ def _append_distance_max_filter(
     if search_coords:
         lat, lng = search_coords
         haversine = _haversine_miles_exists_sql(vr_alias).format(op="<=")
-        oem = _run_distance_bound_sql(vr_alias, "<=")
-        where.append(f"(({haversine}) OR ({oem}))")
-        params.extend([lat, lng, lat, int(distance_max), int(distance_max)])
+        where.append(f"({haversine})")
+        params.extend([lat, lng, lat, int(distance_max)])
         return
+    # No search coordinates available: fall back to OEM ingest distance so at
+    # least stale filters still return something.
     where.append(_run_distance_bound_sql(vr_alias, "<="))
     params.append(int(distance_max))
 
@@ -1575,9 +1575,8 @@ def _append_distance_min_filter(
     if search_coords:
         lat, lng = search_coords
         haversine = _haversine_miles_exists_sql(vr_alias).format(op=">=")
-        oem = _run_distance_bound_sql(vr_alias, ">=")
-        where.append(f"(({haversine}) OR ({oem}))")
-        params.extend([lat, lng, lat, int(distance_min), int(distance_min)])
+        where.append(f"({haversine})")
+        params.extend([lat, lng, lat, int(distance_min)])
         return
     where.append(_run_distance_bound_sql(vr_alias, ">="))
     params.append(int(distance_min))
