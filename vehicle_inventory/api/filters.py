@@ -5,7 +5,6 @@ from vehicle_inventory.db.backend import DbConnection
 from vehicle_inventory.geo.dealer_geo import (
     POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
-    backfill_postal_geo_cache,
     dealer_display_distance_sql,
     ensure_dealer_geo_cache_table,
     expand_state_filter_values,
@@ -837,8 +836,6 @@ def _context_vehicle_count_from_scope(conn: DbConnection) -> int:
 
 def build_filters_payload(conn: DbConnection, ctx: FilterContext) -> Dict:
     ensure_dealer_geo_cache_table(conn)
-    if ctx.search_zip:
-        backfill_postal_geo_cache(conn, limit=250)
 
     latest_run_row = conn.execute("SELECT MAX(run_id) AS max_run_id FROM runs").fetchone()
     latest_run_id = latest_run_row["max_run_id"] if latest_run_row else None

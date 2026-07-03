@@ -299,9 +299,11 @@ def geocode_postal_code(
             _store_postal_geo_cache(conn, normalized, cached)
         return cached
 
-    coords = _nominatim_zip_coords(normalized)
+    # Prefer fast US ZIP services before Nominatim; bulk backfill and page loads
+    # must not block on the 1.1s Nominatim rate limit.
+    coords = _zippopotam_us_zip_coords(normalized)
     if coords is None:
-        coords = _zippopotam_us_zip_coords(normalized)
+        coords = _nominatim_zip_coords(normalized)
     if coords is None:
         coords = _photon_zip_coords(normalized)
     if coords is not None:
@@ -407,8 +409,12 @@ def _store_postal_geo_cache(
     )
 
 
-def backfill_postal_geo_cache(conn: DbConnection, *, limit: int = 250) -> int:
-    """Geocode distinct dealer postal codes missing from ``postal_geo_cache``."""
+def backfill_postal_geo_cache(conn: DbConnection, *, limit: int = 500) -> int:
+    """Geocode distinct dealer postal codes missing from ``postal_geo_cache``.
+
+    Uses the fast Zippopotam API only so this stays suitable for background
+    jobs — never call synchronously from user-facing API handlers.
+    """
     ensure_dealer_geo_cache_table(conn)
     ensure_postal_geo_cache_table(conn)
     rows = conn.execute(
@@ -424,16 +430,18 @@ def backfill_postal_geo_cache(conn: DbConnection, *, limit: int = 250) -> int:
         ORDER BY postal_code
         LIMIT ?
         """,
-        (max(1, int(limit or 250)),),
+        (max(1, int(limit or 500)),),
     ).fetchall()
     stored = 0
     for row in rows:
         normalized = normalize_us_zip(str(row["postal_code"] or ""))
         if not normalized:
             continue
-        coords = geocode_postal_code(normalized, conn=conn)
-        if coords is not None:
-            stored += 1
+        coords = _zippopotam_us_zip_coords(normalized)
+        if coords is None:
+            continue
+        _store_postal_geo_cache(conn, normalized, coords)
+        stored += 1
     if stored:
         commit_with_retry(conn)
     return stored
@@ -1568,10 +1576,12 @@ def geocode_all_dealers(
             )
         )
     stats = dealer_geo_stats(conn)
+    postal_backfilled = backfill_postal_geo_cache(conn, limit=500)
     return {
         "processed": total,
         "batch_geocoded": geocoded,
         "batch_failed": failed,
+        "postal_backfilled": postal_backfilled,
         **stats,
     }
 

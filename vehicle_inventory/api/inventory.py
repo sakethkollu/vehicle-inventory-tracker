@@ -8,7 +8,6 @@ from vehicle_inventory.db.backend import DbConnection, DbRow, fetchall_with_retr
 from vehicle_inventory.geo.dealer_geo import (
     POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
-    backfill_postal_geo_cache,
     dealer_coords_present_sql,
     geocode_postal_code,
     haversine_to_dealer_miles_sql,
@@ -462,8 +461,6 @@ def fetch_inventory_rows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> List[DbRow]:
-    if filters.search_zip:
-        backfill_postal_geo_cache(conn, limit=250)
     sql, params = _inventory_sql(filters, limit=limit, offset=offset, conn=conn)
     return fetchall_with_retry(conn, sql, params)
 
@@ -471,8 +468,6 @@ def fetch_inventory_rows(
 def count_inventory_rows(
     conn: DbConnection, filters: InventoryFilters
 ) -> int:
-    if filters.search_zip:
-        backfill_postal_geo_cache(conn, limit=250)
     from_sql, where_sql, params, group_sql, option_having, _option_join = _inventory_scope(
         filters,
         include_wheels=False,

@@ -952,10 +952,6 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         search_zip_arg = request.args.get("search_zip", "").strip()
         conn = get_conn(readonly=True)
         try:
-            if search_zip_arg:
-                from vehicle_inventory.geo.dealer_geo import backfill_postal_geo_cache
-
-                backfill_postal_geo_cache(conn, limit=250)
             distance_expr, distance_params = _distance_select_sql(
                 _resolve_search_coords(search_zip_arg or None, conn=conn)
             )

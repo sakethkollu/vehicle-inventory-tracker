@@ -1834,6 +1834,13 @@ const INVENTORY_TABLE_COLUMNS = [
     },
   },
   {
+    key: "distance",
+    label: "Dist",
+    width: "4%",
+    sortable: true,
+    cell: (item) => `<td class="num">${item.distance != null ? Number(item.distance).toLocaleString() : "-"}</td>`,
+  },
+  {
     key: "allocation_stage_code",
     label: "Stage",
     width: "7%",
@@ -1863,13 +1870,6 @@ const INVENTORY_TABLE_COLUMNS = [
     width: "5%",
     sortable: true,
     cell: (item) => `<td class="num">${formatMsrpDelta(msrpDeltaValue(item))}</td>`,
-  },
-  {
-    key: "distance",
-    label: "Dist",
-    width: "4%",
-    sortable: true,
-    cell: (item) => `<td class="num">${item.distance != null ? Number(item.distance).toLocaleString() : "-"}</td>`,
   },
   {
     key: "links",
@@ -2973,6 +2973,7 @@ async function refreshInventoryData({ includeAnalytics = true, showTableLoading 
 }
 
 function renderSortedInventory() {
+  renderInventoryTableHeader();
   qs("results-body").innerHTML = currentItems.map(rowHtml).join("");
   bindRowClicks();
   bindInventoryRowSelection();
