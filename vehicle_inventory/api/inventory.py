@@ -6,7 +6,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from vehicle_inventory.db.backend import DbConnection, DbRow, fetchall_with_retry, fetchone_with_retry
 from vehicle_inventory.geo.dealer_geo import (
-    POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
     dealer_coords_present_sql,
     geocode_postal_code,
@@ -394,7 +393,6 @@ def _inventory_scope(
         JOIN vehicle_prices p ON p.vin = v.vin AND p.run_id = vr.run_id
         LEFT JOIN dealers d ON d.dealer_cd = vr.dealer_cd
         LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd
-        {POSTAL_GEO_JOIN_SQL}
         {wheels_sql}
         {option_join}
     """

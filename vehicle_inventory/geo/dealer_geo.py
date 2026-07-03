@@ -286,21 +286,15 @@ def _photon_zip_coords(zip_code: str) -> Optional[Tuple[float, float]]:
 def geocode_postal_code(
     zip_code: str, *, conn: Optional[DbConnection] = None
 ) -> Optional[Tuple[float, float]]:
+    """Resolve a US ZIP code to lat/lng for the user's search location."""
+    del conn  # in-memory cache only; dealer coords live in dealer_geo_cache
     normalized = normalize_us_zip(zip_code)
     if not normalized:
         return None
-    if conn is not None:
-        cached_row = _fetch_postal_geo_cache(conn, normalized)
-        if cached_row is not None:
-            return cached_row
     cached = _zip_coords_cache.get(normalized)
     if cached is not None:
-        if conn is not None:
-            _store_postal_geo_cache(conn, normalized, cached)
         return cached
 
-    # Prefer fast US ZIP services before Nominatim; bulk backfill and page loads
-    # must not block on the 1.1s Nominatim rate limit.
     coords = _zippopotam_us_zip_coords(normalized)
     if coords is None:
         coords = _nominatim_zip_coords(normalized)
@@ -308,8 +302,6 @@ def geocode_postal_code(
         coords = _photon_zip_coords(normalized)
     if coords is not None:
         _zip_coords_cache[normalized] = coords
-        if conn is not None:
-            _store_postal_geo_cache(conn, normalized, coords)
     return coords
 
 
@@ -358,111 +350,14 @@ def ensure_dealer_geo_cache_table(conn: DbConnection) -> None:
         )
         """
     )
-    ensure_postal_geo_cache_table(conn)
-
-
-def ensure_postal_geo_cache_table(conn: DbConnection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS postal_geo_cache (
-            postal_code VARCHAR(5) PRIMARY KEY,
-            latitude DOUBLE NOT NULL,
-            longitude DOUBLE NOT NULL,
-            geocoded_at TEXT NOT NULL
-        )
-        """
-    )
-
-
-def _fetch_postal_geo_cache(
-    conn: DbConnection, postal_code: str
-) -> Optional[Tuple[float, float]]:
-    ensure_postal_geo_cache_table(conn)
-    row = conn.execute(
-        """
-        SELECT latitude, longitude
-        FROM postal_geo_cache
-        WHERE postal_code = ?
-        """,
-        (postal_code,),
-    ).fetchone()
-    if not row:
-        return None
-    try:
-        return float(row["latitude"]), float(row["longitude"])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def _store_postal_geo_cache(
-    conn: DbConnection, postal_code: str, coords: Tuple[float, float]
-) -> None:
-    ensure_postal_geo_cache_table(conn)
-    lat, lng = coords
-    execute_with_retry(
-        conn,
-        """
-        REPLACE INTO postal_geo_cache (postal_code, latitude, longitude, geocoded_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (postal_code, float(lat), float(lng), utc_now()),
-    )
-
-
-def backfill_postal_geo_cache(conn: DbConnection, *, limit: int = 500) -> int:
-    """Geocode distinct dealer postal codes missing from ``postal_geo_cache``.
-
-    Uses the fast Zippopotam API only so this stays suitable for background
-    jobs — never call synchronously from user-facing API handlers.
-    """
-    ensure_dealer_geo_cache_table(conn)
-    ensure_postal_geo_cache_table(conn)
-    rows = conn.execute(
-        """
-        SELECT DISTINCT TRIM(COALESCE(dgc.postal_code, '')) AS postal_code
-        FROM dealer_geo_cache dgc
-        WHERE TRIM(COALESCE(dgc.postal_code, '')) != ''
-          AND NOT EXISTS (
-              SELECT 1
-              FROM postal_geo_cache pgc
-              WHERE pgc.postal_code = SUBSTRING(TRIM(dgc.postal_code), 1, 5)
-          )
-        ORDER BY postal_code
-        LIMIT ?
-        """,
-        (max(1, int(limit or 500)),),
-    ).fetchall()
-    stored = 0
-    for row in rows:
-        normalized = normalize_us_zip(str(row["postal_code"] or ""))
-        if not normalized:
-            continue
-        coords = _zippopotam_us_zip_coords(normalized)
-        if coords is None:
-            continue
-        _store_postal_geo_cache(conn, normalized, coords)
-        stored += 1
-    if stored:
-        commit_with_retry(conn)
-    return stored
-
-
-# Prefer geocoded ZIP centroids over dealer lat/lng when both exist. Dealer
-# geocoding can land on the wrong POI while the cached postal code is reliable.
-POSTAL_GEO_JOIN_SQL = """
-    LEFT JOIN postal_geo_cache pgc
-        ON pgc.postal_code = SUBSTRING(TRIM(COALESCE(dgc.postal_code, '')), 1, 5)
-"""
-DEALER_LAT_SQL = "COALESCE(pgc.latitude, dgc.latitude)"
-DEALER_LNG_SQL = "COALESCE(pgc.longitude, dgc.longitude)"
 
 
 def dealer_coords_present_sql() -> str:
-    return f"({DEALER_LAT_SQL} IS NOT NULL AND {DEALER_LNG_SQL} IS NOT NULL)"
+    return "(dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL)"
 
 
 def haversine_to_dealer_miles_sql() -> str:
-    return haversine_miles_sql("?", "?", lat_col=DEALER_LAT_SQL, lng_col=DEALER_LNG_SQL)
+    return haversine_miles_sql("?", "?", lat_col="dgc.latitude", lng_col="dgc.longitude")
 
 
 def clear_dealer_geo_cache(conn: DbConnection) -> int:
@@ -1426,9 +1321,6 @@ def _store_dealer_geo(
             """,
             (dealer_cd, query, lat, lon, postal_code or "", city or "", state or "", utc_now()),
         )
-        normalized_postal = normalize_us_zip(postal_code or "")
-        if normalized_postal:
-            _store_postal_geo_cache(conn, normalized_postal, (lat, lon))
         return normalize_state_code(state) is not None
     execute_with_retry(
         conn,
@@ -1576,12 +1468,10 @@ def geocode_all_dealers(
             )
         )
     stats = dealer_geo_stats(conn)
-    postal_backfilled = backfill_postal_geo_cache(conn, limit=500)
     return {
         "processed": total,
         "batch_geocoded": geocoded,
         "batch_failed": failed,
-        "postal_backfilled": postal_backfilled,
         **stats,
     }
 
@@ -1657,15 +1547,11 @@ def _haversine_miles_exists_sql(vr_alias: str) -> str:
     EXISTS (
         SELECT 1
         FROM dealer_geo_cache dgc
-        {POSTAL_GEO_JOIN_SQL}
         WHERE dgc.dealer_cd = {vr_alias}.dealer_cd
           AND {dealer_coords_present_sql()}
           AND ({miles}) {{op}} ?
     )
     """
-
-
-MAX_DEALER_GEO_DISPLAY_MILES = 500
 
 
 def dealer_display_distance_sql(
@@ -1687,10 +1573,7 @@ def dealer_display_distance_sql(
 def normalize_dealer_display_distance(distance_miles: Optional[float]) -> Optional[float]:
     if distance_miles is None:
         return None
-    value = float(distance_miles)
-    if value > MAX_DEALER_GEO_DISPLAY_MILES:
-        return None
-    return round(value, 1)
+    return round(float(distance_miles), 1)
 
 
 def _append_distance_max_filter(

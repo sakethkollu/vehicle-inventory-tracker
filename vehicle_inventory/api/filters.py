@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from vehicle_inventory.db.backend import DbConnection
 from vehicle_inventory.geo.dealer_geo import (
-    POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
     dealer_display_distance_sql,
     ensure_dealer_geo_cache_table,
@@ -116,7 +115,6 @@ def _build_vehicle_scope(
     )
     if needs_geo_join:
         joins.append("LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd")
-        joins.append(POSTAL_GEO_JOIN_SQL.strip())
 
     if exclude != "series" and ctx.series_codes:
         placeholders = ",".join("?" for _ in ctx.series_codes)
@@ -410,10 +408,7 @@ def _query_dealer_facets(
     available_from, available_where, available_params = _build_vehicle_scope(
         ctx, exclude="dealer", conn=conn
     )
-    geo_join = (
-        " LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd"
-        f"{POSTAL_GEO_JOIN_SQL}"
-    )
+    geo_join = " LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd"
     ref = _filter_reference_coords(ctx, conn=conn)
 
     if ref:
