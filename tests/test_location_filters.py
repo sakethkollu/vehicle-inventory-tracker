@@ -20,7 +20,7 @@ def test_filter_reference_coords_prefers_search_zip_over_browser():
     assert coords == (37.3352, -121.8811)
 
 
-def test_filter_reference_coords_falls_back_to_browser_when_zip_geocode_fails():
+def test_filter_reference_coords_returns_none_when_zip_geocode_fails():
     ctx = FilterContext(
         search_zip="95132",
         reference_lat=37.0,
@@ -29,7 +29,7 @@ def test_filter_reference_coords_falls_back_to_browser_when_zip_geocode_fails():
     with patch("vehicle_inventory.api.filters.geocode_postal_code", return_value=None):
         coords = _filter_reference_coords(ctx)
 
-    assert coords == (37.0, -122.0)
+    assert coords is None
 
 
 def test_append_run_location_filters_uses_only_haversine_with_search_zip():

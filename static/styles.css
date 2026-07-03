@@ -667,6 +667,26 @@ button:hover {
   margin-bottom: 8px;
 }
 
+.filter-toggle-row {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.filter-toggle-row input[type="checkbox"] {
+  margin: 0;
+  width: auto;
+}
+
+#distance-max-wrap.is-disabled {
+  opacity: 0.55;
+}
+
+#distance-max-wrap.is-disabled input {
+  cursor: not-allowed;
+}
+
 .selection-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

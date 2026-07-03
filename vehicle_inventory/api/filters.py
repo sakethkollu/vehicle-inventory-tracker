@@ -31,6 +31,7 @@ class FilterContext:
     distance_max: Optional[int] = None
     distance_min: Optional[int] = None
     search_zip: Optional[str] = None
+    filter_by_distance: bool = False
     state_codes: List[str] = field(default_factory=list)
     reference_lat: Optional[float] = None
     reference_lng: Optional[float] = None
@@ -82,6 +83,7 @@ def parse_filter_context(args) -> FilterContext:
         distance_max=_parse_int_arg(args, "distance_max"),
         distance_min=_parse_int_arg(args, "distance_min"),
         search_zip=normalize_us_zip(args.get("search_zip", "").strip()),
+        filter_by_distance=args.get("filter_by_distance", "0") == "1",
         state_codes=[
             x.strip().upper() for x in args.get("state_codes", "").split(",") if x.strip()
         ],
@@ -158,10 +160,10 @@ def _build_vehicle_scope(
     append_run_location_filters(
         where,
         params,
-        distance_max=ctx.distance_max if not location_excluded else None,
-        distance_min=ctx.distance_min if not location_excluded else None,
+        distance_max=ctx.distance_max if ctx.filter_by_distance and not location_excluded else None,
+        distance_min=ctx.distance_min if ctx.filter_by_distance and not location_excluded else None,
         state_codes=ctx.state_codes if exclude != "state" else None,
-        search_zip=ctx.search_zip if not location_excluded else None,
+        search_zip=ctx.search_zip if ctx.filter_by_distance and not location_excluded else None,
     )
 
     from_sql = f"vehicles v {' '.join(joins)}".strip()
@@ -380,11 +382,7 @@ def _filter_reference_coords(ctx: FilterContext) -> Optional[Tuple[float, float]
     if expand_state_filter_values(ctx.state_codes or []):
         return None
     if ctx.search_zip:
-        coords = geocode_postal_code(ctx.search_zip)
-        if coords:
-            return coords
-    if ctx.reference_lat is not None and ctx.reference_lng is not None:
-        return float(ctx.reference_lat), float(ctx.reference_lng)
+        return geocode_postal_code(ctx.search_zip)
     return None
 
 

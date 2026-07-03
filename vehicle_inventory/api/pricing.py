@@ -121,8 +121,8 @@ def _inventory_item_to_price_row(item: Dict) -> Dict:
 def _scoped_price_sql(filters: InventoryFilters) -> Tuple[str, List]:
     from vehicle_inventory.api.inventory import (
         _distance_select_sql,
+        _inventory_reference_coords,
         _inventory_scope,
-        _resolve_search_coords,
     )
 
     from_sql, where_sql, params, group_sql, option_having, _option_join = _inventory_scope(
@@ -130,7 +130,7 @@ def _scoped_price_sql(filters: InventoryFilters) -> Tuple[str, List]:
         include_wheels=False,
     )
     distance_expr, distance_params = _distance_select_sql(
-        _resolve_search_coords(filters.search_zip)
+        _inventory_reference_coords(filters)
     )
     sql = f"""
         SELECT

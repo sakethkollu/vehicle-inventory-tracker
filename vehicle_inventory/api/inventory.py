@@ -126,11 +126,45 @@ SORTABLE_INVENTORY_COLUMNS: Dict[str, str] = {
 }
 
 
+def _parse_int_arg(args, key: str) -> Optional[int]:
+    raw = args.get(key, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_float_arg(args, key: str) -> Optional[float]:
+    raw = args.get(key, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _resolve_search_coords(search_zip: Optional[str]) -> Optional[Tuple[float, float]]:
     normalized = normalize_us_zip(search_zip or "")
     if not normalized:
         return None
     return geocode_postal_code(normalized)
+
+
+def _inventory_reference_coords(filters: InventoryFilters) -> Optional[Tuple[float, float]]:
+    if not filters.search_zip:
+        return None
+    return _resolve_search_coords(filters.search_zip)
+
+
+def _scoped_distance_max(filters: InventoryFilters) -> Optional[int]:
+    return filters.distance_max if filters.filter_by_distance else None
+
+
+def _scoped_distance_min(filters: InventoryFilters) -> Optional[int]:
+    return filters.distance_min if filters.filter_by_distance else None
 
 
 def _distance_select_sql(
@@ -171,6 +205,7 @@ class InventoryFilters:
     distance_max: Optional[int] = None
     distance_min: Optional[int] = None
     search_zip: Optional[str] = None
+    filter_by_distance: bool = False
     state_codes: List[str] = field(default_factory=list)
     active_only: bool = True
     option_codes: List[str] = field(default_factory=list)
@@ -190,16 +225,6 @@ def _parse_series_codes(args) -> List[str]:
         return [x.strip() for x in raw.split(",") if x.strip()]
     legacy = args.get("series_code", "").strip()
     return [legacy] if legacy else []
-
-
-def _parse_int_arg(args, key: str) -> Optional[int]:
-    raw = args.get(key, "").strip()
-    if not raw:
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 def parse_inventory_filters(args) -> InventoryFilters:
@@ -229,6 +254,7 @@ def parse_inventory_filters(args) -> InventoryFilters:
         distance_max=_parse_int_arg(args, "distance_max"),
         distance_min=_parse_int_arg(args, "distance_min"),
         search_zip=normalize_us_zip(args.get("search_zip", "").strip()),
+        filter_by_distance=args.get("filter_by_distance", "0") == "1",
         state_codes=[
             x.strip().upper() for x in args.get("state_codes", "").split(",") if x.strip()
         ],
@@ -316,10 +342,10 @@ def _append_inventory_filters(
     append_run_location_filters(
         where,
         params,
-        distance_max=filters.distance_max,
-        distance_min=filters.distance_min,
+        distance_max=_scoped_distance_max(filters),
+        distance_min=_scoped_distance_min(filters),
         state_codes=filters.state_codes,
-        search_zip=filters.search_zip,
+        search_zip=filters.search_zip if filters.filter_by_distance else None,
     )
     if filters.active_only:
         where.append("v.is_active = 1")
@@ -398,7 +424,7 @@ def _inventory_sql(
         include_wheels=False,
     )
     distance_expr, distance_params = _distance_select_sql(
-        _resolve_search_coords(filters.search_zip)
+        _inventory_reference_coords(filters)
     )
     select_sql = _inventory_select(include_wheels=False, distance_select=distance_expr)
     sql = f"""
@@ -650,10 +676,10 @@ def build_vehicle_filter_sql(filters: InventoryFilters) -> Tuple[str, List]:
     append_run_location_filters(
         run_exists_filters,
         run_exists_params,
-        distance_max=filters.distance_max,
-        distance_min=filters.distance_min,
+        distance_max=_scoped_distance_max(filters),
+        distance_min=_scoped_distance_min(filters),
         state_codes=filters.state_codes,
-        search_zip=filters.search_zip,
+        search_zip=filters.search_zip if filters.filter_by_distance else None,
     )
     if run_exists_filters:
         where.append(
@@ -704,10 +730,10 @@ def _vehicle_run_filter_clauses(filters: InventoryFilters) -> Tuple[str, List]:
     append_run_location_filters(
         location_filters,
         location_params,
-        distance_max=filters.distance_max,
-        distance_min=filters.distance_min,
+        distance_max=_scoped_distance_max(filters),
+        distance_min=_scoped_distance_min(filters),
         state_codes=filters.state_codes,
-        search_zip=filters.search_zip,
+        search_zip=filters.search_zip if filters.filter_by_distance else None,
     )
     clauses.extend(location_filters)
     params.extend(location_params)

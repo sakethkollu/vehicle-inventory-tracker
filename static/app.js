@@ -29,6 +29,57 @@ function getUserReferenceCoords() {
   return userReferenceCoords;
 }
 
+function defaultFilterRadiusMiles() {
+  const make = window.VIT?.currentMake || document.body?.dataset?.make || "toyota";
+  return Number(window.VIT?.getIngestDefaults?.(make)?.distance) || DEFAULT_SEARCH_RADIUS_MILES;
+}
+
+function isFilterByDistanceEnabled() {
+  return qs("filter-by-distance")?.checked === true;
+}
+
+function hasSearchZip() {
+  return Boolean(normalizeZipCode(qs("search-zip-code")?.value.trim() || ""));
+}
+
+function updateDistanceFilterUi() {
+  const toggle = qs("filter-by-distance");
+  const distanceWrap = qs("distance-max-wrap");
+  const distanceInput = qs("distance-max-miles");
+  const searchZip = hasSearchZip();
+  if (toggle) {
+    toggle.disabled = !searchZip;
+    if (!searchZip) {
+      toggle.checked = false;
+    }
+  }
+  const enabled = searchZip && isFilterByDistanceEnabled();
+  if (distanceInput) {
+    distanceInput.disabled = !enabled;
+    if (enabled && !distanceInput.value.trim()) {
+      distanceInput.value = String(readStoredSearchRadius() || defaultFilterRadiusMiles());
+    }
+  }
+  if (distanceWrap) {
+    distanceWrap.classList.toggle("is-disabled", !enabled);
+  }
+}
+
+function locationFilterQuerySuffix() {
+  const { searchZip, distanceMax, filterByDistance } = getLocationFilterParams();
+  let params = "";
+  if (searchZip) {
+    params += `&search_zip=${encodeURIComponent(searchZip)}`;
+  }
+  if (filterByDistance) {
+    params += "&filter_by_distance=1";
+    if (distanceMax) {
+      params += `&distance_max=${encodeURIComponent(distanceMax)}`;
+    }
+  }
+  return params;
+}
+
 function startUserLocationWatch() {
   if (userLocationRequestStarted || !navigator.geolocation) {
     return;
@@ -55,8 +106,11 @@ function normalizeZipCode(value) {
 function clearZipRadiusFilters() {
   const zipEl = qs("search-zip-code");
   const distanceEl = qs("distance-max-miles");
+  const filterToggle = qs("filter-by-distance");
   if (zipEl) zipEl.value = "";
   if (distanceEl) distanceEl.value = "";
+  if (filterToggle) filterToggle.checked = false;
+  updateDistanceFilterUi();
   try {
     localStorage.removeItem(searchZipStorageKey());
     localStorage.removeItem(searchRadiusStorageKey());
@@ -72,27 +126,51 @@ function hasStateFilterSelected() {
 function getLocationFilterParams() {
   const stateCodes = selectedMultiValues(qs("state-codes")).join(",");
   if (hasStateFilterSelected()) {
-    return { stateCodes, searchZip: "", distanceMax: "" };
+    return { stateCodes, searchZip: "", distanceMax: "", filterByDistance: false };
   }
+  const searchZip = normalizeZipCode(qs("search-zip-code")?.value.trim() || "");
+  const filterByDistance = isFilterByDistanceEnabled() && Boolean(searchZip);
   return {
     stateCodes,
-    searchZip: normalizeZipCode(qs("search-zip-code")?.value.trim() || ""),
-    distanceMax: qs("distance-max-miles")?.value.trim() || "",
+    searchZip,
+    distanceMax: filterByDistance ? qs("distance-max-miles")?.value.trim() || "" : "",
+    filterByDistance,
   };
 }
 
-function applySearchLocation(zip, radiusMiles) {
+function applySearchZip(zip) {
   const zipEl = qs("search-zip-code");
-  const distanceEl = qs("distance-max-miles");
   const ingestZipEl = qs("ingest-zip-code");
-  const ingestDistanceEl = qs("ingest-distance");
-  const normalizedZip = normalizeZipCode(zip) || defaultSearchZip();
-  const radius = Number(radiusMiles) > 0 ? Number(radiusMiles) : DEFAULT_SEARCH_RADIUS_MILES;
+  const normalizedZip = normalizeZipCode(zip);
   if (zipEl) zipEl.value = normalizedZip;
-  if (distanceEl) distanceEl.value = String(radius);
-  if (ingestZipEl) ingestZipEl.value = normalizedZip;
+  if (ingestZipEl && normalizedZip) ingestZipEl.value = normalizedZip;
+  if (normalizedZip) {
+    window.VIT?.persistSearchLocation?.(
+      normalizedZip,
+      readStoredSearchRadius() || defaultFilterRadiusMiles()
+    );
+  }
+  if (!normalizedZip && sortState.key === "distance") {
+    sortState.key = "advertized_price";
+    sortState.dir = "asc";
+  }
+  updateDistanceFilterUi();
+}
+
+function applySearchLocation(zip, radiusMiles) {
+  applySearchZip(zip);
+  const distanceEl = qs("distance-max-miles");
+  const ingestDistanceEl = qs("ingest-distance");
+  const radius = Number(radiusMiles) > 0 ? Number(radiusMiles) : defaultFilterRadiusMiles();
+  if (distanceEl && isFilterByDistanceEnabled()) {
+    distanceEl.value = String(radius);
+  }
   if (ingestDistanceEl) ingestDistanceEl.value = String(radius);
-  window.VIT?.persistSearchLocation?.(normalizedZip, radius);
+  const normalizedZip = normalizeZipCode(zip);
+  if (normalizedZip) {
+    window.VIT?.persistSearchLocation?.(normalizedZip, radius);
+  }
+  updateDistanceFilterUi();
 }
 
 function filtersStorageKey() {
@@ -111,6 +189,7 @@ function collectFilterState() {
     activeOnly: qs("active-only")?.checked !== false,
     searchZip: normalizeZipCode(qs("search-zip-code")?.value.trim() || ""),
     searchRadius: qs("distance-max-miles")?.value.trim() || "",
+    filterByDistance: isFilterByDistanceEnabled(),
     histogram:
       histogramState.metric != null &&
       histogramState.min != null &&
@@ -157,21 +236,24 @@ function applyStoredFilterState(saved) {
   if (activeOnlyEl) activeOnlyEl.checked = saved.activeOnly !== false;
 
   const hasStates = (saved.states || []).length > 0;
+  const filterToggle = qs("filter-by-distance");
+  if (filterToggle) {
+    filterToggle.checked = Boolean(saved.filterByDistance);
+  }
   if (hasStates) {
     const zipEl = qs("search-zip-code");
     const distanceEl = qs("distance-max-miles");
     if (zipEl) zipEl.value = "";
     if (distanceEl) distanceEl.value = "";
+    if (filterToggle) filterToggle.checked = false;
   } else if (saved.searchZip || readStoredSearchZip()) {
     const zip = saved.searchZip || readStoredSearchZip() || "";
-    const radius =
-      saved.searchRadius ||
-      readStoredSearchRadius() ||
-      String(DEFAULT_SEARCH_RADIUS_MILES);
-    applySearchLocation(zip, radius);
-  } else {
-    clearZipRadiusFilters();
+    applySearchZip(zip);
+    const radius = saved.searchRadius || readStoredSearchRadius() || "";
+    const distanceEl = qs("distance-max-miles");
+    if (distanceEl && radius) distanceEl.value = radius;
   }
+  updateDistanceFilterUi();
 
   if (
     saved.histogram &&
@@ -215,11 +297,9 @@ function restoreFilterState() {
     if (!raw) {
       const zip = readStoredSearchZip();
       if (zip) {
-        applySearchLocation(
-          zip,
-          readStoredSearchRadius() || DEFAULT_SEARCH_RADIUS_MILES
-        );
+        applySearchZip(zip);
       }
+      updateDistanceFilterUi();
       return false;
     }
     return applyStoredFilterState(JSON.parse(raw));
@@ -233,13 +313,12 @@ window.VIT.saveFilterState = saveFilterState;
 
 async function initializeSearchLocation() {
   const restored = restoreFilterState();
-  if (typeof renderInventoryTableHeader === "function") {
-    renderInventoryTableHeader();
-  }
+  updateDistanceFilterUi();
+  renderInventoryTableHeader();
   const locationMetaEl = qs("location-filter-meta");
-  if (locationMetaEl && !restored) {
+  if (locationMetaEl && !restored && !hasSearchZip()) {
     locationMetaEl.textContent =
-      "No location filter applied. Set ZIP + distance or pick states to narrow results.";
+      "No location filter applied. Enter a search ZIP or pick states to narrow results.";
   }
 }
 
@@ -1154,7 +1233,9 @@ function renderDealerFilterList() {
           ? ` (${Number(item.vehicle_count).toLocaleString()})`
           : "";
       const distance =
-        item.distance_miles != null && Number.isFinite(Number(item.distance_miles))
+        hasSearchZip() &&
+        item.distance_miles != null &&
+        Number.isFinite(Number(item.distance_miles))
           ? ` · ${Math.round(Number(item.distance_miles)).toLocaleString()} mi`
           : "";
       const name = item.label || value;
@@ -1827,20 +1908,28 @@ const INVENTORY_TABLE_COLUMNS = [
   },
 ];
 
+function visibleInventoryColumns() {
+  if (!hasSearchZip()) {
+    return INVENTORY_TABLE_COLUMNS.filter((column) => column.key !== "distance");
+  }
+  return INVENTORY_TABLE_COLUMNS;
+}
+
 function renderInventoryTableHeader() {
   const table = document.querySelector(".inventory-table");
   const row = table?.querySelector("thead tr");
   if (!table || !row) return;
 
+  const columns = visibleInventoryColumns();
   const colgroup = table.querySelector("colgroup") || document.createElement("colgroup");
-  colgroup.innerHTML = `<col style="width:2%" />${INVENTORY_TABLE_COLUMNS.map(
+  colgroup.innerHTML = `<col style="width:2%" />${columns.map(
     (column) => `<col style="width:${escapeHtml(column.width || "auto")}" />`
   ).join("")}`;
   if (!colgroup.parentElement) {
     table.prepend(colgroup);
   }
 
-  row.innerHTML = `<th scope="col" class="select-col"><input type="checkbox" id="inventory-select-page" title="Select all on this page" aria-label="Select all on this page" /></th>${INVENTORY_TABLE_COLUMNS.map((column) => {
+  row.innerHTML = `<th scope="col" class="select-col"><input type="checkbox" id="inventory-select-page" title="Select all on this page" aria-label="Select all on this page" /></th>${columns.map((column) => {
     if (!column.sortable) {
       return `<th scope="col">${escapeHtml(column.label)}</th>`;
     }
@@ -2491,9 +2580,8 @@ function buildFilterQueryParams() {
   const stageCodes = selectedMultiValues(qs("stage-codes")).join(",");
   const optionCodes = selectedMultiValues(qs("option-codes")).join(",");
   const dealerCodes = selectedMultiValues(qs("dealer-values")).join(",");
-  const { stateCodes, searchZip, distanceMax } = getLocationFilterParams();
+  const { stateCodes } = getLocationFilterParams();
   const activeOnly = qs("active-only")?.checked ? "1" : "0";
-  const ref = !hasStateFilterSelected() ? getUserReferenceCoords() : null;
 
   return (
     `series_codes=${encodeURIComponent(seriesCodes)}` +
@@ -2505,9 +2593,7 @@ function buildFilterQueryParams() {
     `&option_codes=${encodeURIComponent(optionCodes)}` +
     `&dealer_codes=${encodeURIComponent(dealerCodes)}` +
     `&state_codes=${encodeURIComponent(stateCodes)}` +
-    (searchZip ? `&search_zip=${encodeURIComponent(searchZip)}` : "") +
-    (distanceMax ? `&distance_max=${encodeURIComponent(distanceMax)}` : "") +
-    (ref ? `&reference_lat=${encodeURIComponent(ref.lat)}&reference_lng=${encodeURIComponent(ref.lng)}` : "") +
+    locationFilterQuerySuffix() +
     `&active_only=${activeOnly}`
   );
 }
@@ -2611,7 +2697,7 @@ async function onFacetFilterChange(event) {
 function rowHtml(item) {
   const isSelected = inventorySelectedVins.has(item.vin);
   const selectCell = `<td class="select-cell"><input type="checkbox" class="inventory-row-select" data-vin="${escapeHtml(item.vin)}" ${isSelected ? "checked" : ""} aria-label="Select ${escapeHtml(item.vin)}" /></td>`;
-  return `<tr class="clickable-row${isSelected ? " is-row-selected" : ""}" data-vin="${escapeHtml(item.vin)}">${selectCell}${INVENTORY_TABLE_COLUMNS.map((column) => column.cell(item)).join("")}</tr>`;
+  return `<tr class="clickable-row${isSelected ? " is-row-selected" : ""}" data-vin="${escapeHtml(item.vin)}">${selectCell}${visibleInventoryColumns().map((column) => column.cell(item)).join("")}</tr>`;
 }
 
 function buildInventoryQueryParams(includePagination = true) {
@@ -2625,7 +2711,7 @@ function buildInventoryQueryParams(includePagination = true) {
   const dealerCodes = selectedMultiValues(qs("dealer-values")).join(",");
   const vinQuery = qs("vin-query")?.value.trim() || "";
   const stockQuery = qs("stock-query")?.value.trim() || "";
-  const { stateCodes, searchZip, distanceMax } = getLocationFilterParams();
+  const { stateCodes } = getLocationFilterParams();
   const activeOnly = qs("active-only")?.checked ? "1" : "0";
 
   let params =
@@ -2641,8 +2727,7 @@ function buildInventoryQueryParams(includePagination = true) {
     `&state_codes=${encodeURIComponent(stateCodes)}` +
     `&vin_query=${encodeURIComponent(vinQuery)}` +
     `&stock_query=${encodeURIComponent(stockQuery)}` +
-    (searchZip ? `&search_zip=${encodeURIComponent(searchZip)}` : "") +
-    (distanceMax ? `&distance_max=${encodeURIComponent(distanceMax)}` : "") +
+    locationFilterQuerySuffix() +
     `&active_only=${activeOnly}`;
 
   if (histogramState.min != null && histogramState.max != null && histogramState.metric) {
@@ -2848,17 +2933,16 @@ async function fetchAndRenderInventory(expectedToken) {
   const locationMetaEl = qs("location-filter-meta");
   if (locationMetaEl) {
     const parts = [];
-    const searchZipValue = normalizeZipCode(qs("search-zip-code")?.value.trim() || "");
-    const distanceMaxValue = qs("distance-max-miles")?.value.trim();
+    const { searchZip, distanceMax, filterByDistance } = getLocationFilterParams();
     const selectedStates = selectedMultiValues(qs("state-codes"));
     if (selectedStates.length) {
       parts.push(`States: ${selectedStates.join(", ")}`);
-    } else if (searchZipValue && distanceMaxValue) {
+    } else if (filterByDistance && searchZip && distanceMax) {
       parts.push(
-        `Within ${Number(distanceMaxValue).toLocaleString()} mi of ZIP ${searchZipValue}`
+        `Filtered within ${Number(distanceMax).toLocaleString()} mi of ZIP ${searchZip}`
       );
-    } else if (distanceMaxValue) {
-      parts.push(`Max distance: ${Number(distanceMaxValue).toLocaleString()} mi`);
+    } else if (searchZip) {
+      parts.push(`Distances shown from ZIP ${searchZip} (not filtering by distance)`);
     }
     locationMetaEl.textContent = parts.join(" · ");
   }
@@ -3358,12 +3442,16 @@ function renderDetail(data) {
     ? `<a href="${escapeHtml(latest.dealer_website)}" target="_blank" rel="noreferrer">${escapeHtml(latest.dealer_marketing_name || latest.dealer_cd || "Dealer")}</a>`
     : escapeHtml(latest.dealer_marketing_name || latest.dealer_cd || "-");
 
+  const distanceLine = hasSearchZip()
+    ? `<div><strong>Distance:</strong> ${escapeHtml(latest.distance ?? "-")} mi</div>`
+    : "";
+
   qs("detail-latest").innerHTML = `
     <div><strong>Run:</strong> ${escapeHtml(latest.run_id ?? "-")} (${escapeHtml(formatDate(latest.queried_at))})</div>
     <div><strong>Stock #:</strong> ${escapeHtml(latest.stock_num || "-")}</div>
     <div><strong>Status:</strong> ${escapeHtml(latest.inventory_status || "-")}</div>
     <div><strong>Stage:</strong> ${escapeHtml(latest.allocation_stage_label || latest.allocation_stage_code || "-")}</div>
-    <div><strong>Distance:</strong> ${escapeHtml(latest.distance ?? "-")} mi</div>
+    ${distanceLine}
     <div><strong>Advertised:</strong> ${escapeHtml(formatMoney(latest.advertized_price))}</div>
     <div><strong>Effective Price:</strong> ${escapeHtml(formatMoney(salePrice))}</div>
     <div><strong>Total MSRP:</strong> ${escapeHtml(formatMoney(latest.total_msrp))}</div>
@@ -4381,7 +4469,7 @@ async function pdfPrepareSwatchInfo(info) {
 }
 
 function pdfHasAnyInventoryFilters() {
-  const { stateCodes, searchZip, distanceMax } = getLocationFilterParams();
+  const { stateCodes, searchZip, distanceMax, filterByDistance } = getLocationFilterParams();
   const vinQuery = qs("vin-query")?.value.trim() || "";
   const stockQuery = qs("stock-query")?.value.trim() || "";
   const hasPriceFilter =
@@ -4396,7 +4484,7 @@ function pdfHasAnyInventoryFilters() {
       selectedMultiValues(qs("drivetrain-codes")).length ||
       selectedMultiValues(qs("stage-codes")).length ||
       selectedMultiValues(qs("option-codes")).length ||
-      (searchZip && distanceMax) ||
+      (filterByDistance && searchZip && distanceMax) ||
       stateCodes.length ||
       vinQuery ||
       stockQuery ||
@@ -4427,7 +4515,7 @@ function buildPdfFilterSummaryBullets() {
   const drivetrains = pdfFilterLabels("drivetrain-codes");
   const stages = pdfFilterLabels("stage-codes");
   const options = pdfFilterLabels("option-codes");
-  const { searchZip, distanceMax } = getLocationFilterParams();
+  const { searchZip, distanceMax, filterByDistance } = getLocationFilterParams();
   const vinQuery = qs("vin-query")?.value.trim() || "";
   const stockQuery = qs("stock-query")?.value.trim() || "";
 
@@ -4436,11 +4524,13 @@ function buildPdfFilterSummaryBullets() {
   if (dealers.length) pushBullet("Dealers", pdfFilterListTokens(dealers));
   if (states.length) {
     pushBullet("States", pdfFilterListTokens(states));
-  } else if (searchZip && distanceMax) {
+  } else if (filterByDistance && searchZip && distanceMax) {
     pushBullet("Location", [
       { text: `${distanceMax} miles of ZIP `, bold: false },
       { text: searchZip, bold: true },
     ]);
+  } else if (searchZip) {
+    pushBullet("Distance reference", [{ text: `ZIP ${searchZip}`, bold: true }]);
   }
   if (exterior.length) pushBullet("Exterior", pdfFilterColorListTokens(exterior));
   if (interior.length) pushBullet("Interior", pdfFilterColorListTokens(interior));
@@ -5017,10 +5107,8 @@ async function exportSelectedVehiclesPdf() {
       if (btn) {
         btn.textContent = `Loading ${i + 1}/${orderedVins.length}…`;
       }
-      const { searchZip: pdfSearchZip } = getLocationFilterParams();
       const detailUrl =
-        `/api/vehicle/${encodeURIComponent(vin)}` +
-        (pdfSearchZip ? `?search_zip=${encodeURIComponent(pdfSearchZip)}` : "");
+        `/api/vehicle/${encodeURIComponent(vin)}${vehicleDetailQueryParams()}`;
       const data = await fetchJson(detailUrl);
       let imageDataUrl = "";
       const imageUrl = pickCarJellyImageUrl(data);
@@ -5406,11 +5494,13 @@ function startGeocodePolling() {
   pollGeocodeStatus().catch((err) => console.warn("[geocode]", err.message));
 }
 
-async function openVehicleDetail(vin) {
+function vehicleDetailQueryParams() {
   const { searchZip } = getLocationFilterParams();
-  const url =
-    `/api/vehicle/${encodeURIComponent(vin)}` +
-    (searchZip ? `?search_zip=${encodeURIComponent(searchZip)}` : "");
+  return searchZip ? `?search_zip=${encodeURIComponent(searchZip)}` : "";
+}
+
+async function openVehicleDetail(vin) {
+  const url = `/api/vehicle/${encodeURIComponent(vin)}${vehicleDetailQueryParams()}`;
   const data = await fetchJson(url);
   qs("vehicle-detail").classList.remove("hidden");
   qs("detail-backdrop").classList.remove("hidden");
@@ -5442,6 +5532,7 @@ function setupEventHandlers() {
   const stockQuery = qs("stock-query");
   const searchZipCode = qs("search-zip-code");
   const distanceMaxMiles = qs("distance-max-miles");
+  const filterByDistance = qs("filter-by-distance");
   const detailClose = qs("detail-close");
   const detailExportPdf = qs("detail-export-pdf");
   const detailBackdrop = qs("detail-backdrop");
@@ -5585,13 +5676,18 @@ function setupEventHandlers() {
         await applyLocationFilters();
       }
     });
-    searchZipCode.addEventListener("change", () => {
+    searchZipCode.addEventListener("change", async () => {
       clearMultiSelect("state-codes");
-      applySearchLocation(
-        searchZipCode.value,
-        qs("distance-max-miles")?.value || DEFAULT_SEARCH_RADIUS_MILES
-      );
-      scheduleFilterStateSave();
+      applySearchZip(searchZipCode.value);
+      renderInventoryTableHeader();
+      await applyLocationFilters();
+    });
+  }
+  if (filterByDistance) {
+    filterByDistance.addEventListener("change", async () => {
+      updateDistanceFilterUi();
+      renderInventoryTableHeader();
+      await applyLocationFilters();
     });
   }
   if (distanceMaxMiles) {
