@@ -1469,6 +1469,27 @@ def geocode_missing_dealers(conn: DbConnection, limit: int = 20) -> int:
     return int(result.get("batch_geocoded", 0))
 
 
+def reset_oem_provisional_geo(conn: DbConnection) -> int:
+    """Delete dealer_geo_cache rows whose coordinates came from OEM dealer sync.
+
+    Those rows have ``query_text`` prefixed with ``oem:`` and are treated as
+    provisional. Removing them lets the bulk geocoder replace them with real
+    website / Photon / Nominatim results.
+    """
+    ensure_dealer_geo_cache_table(conn)
+    before_row = conn.execute(
+        "SELECT COUNT(*) AS total FROM dealer_geo_cache WHERE query_text LIKE 'oem:%'"
+    ).fetchone()
+    before = int(before_row["total"]) if before_row else 0
+    execute_with_retry(
+        conn,
+        "DELETE FROM dealer_geo_cache WHERE query_text LIKE 'oem:%'",
+        (),
+    )
+    commit_with_retry(conn)
+    return before
+
+
 def _haversine_miles_exists_sql(vr_alias: str) -> str:
     miles = haversine_miles_sql("?", "?")
     return f"""

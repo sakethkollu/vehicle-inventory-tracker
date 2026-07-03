@@ -28,6 +28,7 @@ from vehicle_inventory.geo.dealer_geo import (
     clear_dealer_geo_cache,
     dealer_geo_stats,
     geocode_all_dealers,
+    reset_oem_provisional_geo,
     reverse_geocode_postal_code,
 )
 from vehicle_inventory.jobs.runs import JobRunStore
@@ -265,6 +266,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         if not cancelled:
             return jsonify({"ok": False, "error": "No geocoding job is running."}), 409
         return jsonify({"ok": True, "job": request_jobs().geocode_status()})
+
+    @app.post("/api/admin/geocode/reset-oem")
+    @require_admin_api
+    def admin_geocode_reset_oem():
+        conn = get_conn()
+        try:
+            removed = reset_oem_provisional_geo(conn)
+        finally:
+            conn.close()
+        return jsonify({"ok": True, "removed": removed})
 
     @app.post("/api/admin/workers/repair")
     @require_admin_api

@@ -1230,6 +1230,26 @@ async function cancelGeocodeJob() {
   }
 }
 
+async function resetOemGeocode() {
+  const confirmed = confirm(
+    "Delete all OEM-provisional dealer coordinates?\n\n" +
+      "Bulk geocoding will replace them with real coordinates from website / Photon / Nominatim.",
+  );
+  if (!confirmed) return;
+  const btn = qs("admin-geocode-reset-oem-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const payload = await fetchJson("/api/admin/geocode/reset-oem", { method: "POST", body: "{}" });
+    const removed = Number(payload?.removed || 0);
+    alert(`Removed ${removed} OEM-provisional coord row(s). Run "Start geocode" to re-populate.`);
+    await refreshOverview();
+  } catch (err) {
+    alert(err.message || "Failed to reset OEM coords.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function setupAdmin() {
   if (window.VIT?.initMakeSwitcher) {
     try {
@@ -1245,6 +1265,9 @@ async function setupAdmin() {
   });
   qs("admin-geocode-cancel-btn")?.addEventListener("click", () => {
     cancelGeocodeJob().catch((err) => console.error(err));
+  });
+  qs("admin-geocode-reset-oem-btn")?.addEventListener("click", () => {
+    resetOemGeocode().catch((err) => console.error(err));
   });
   qs("admin-workers-repair-btn")?.addEventListener("click", () => {
     repairWorkerQueues().catch((err) => console.error(err));
