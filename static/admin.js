@@ -1250,6 +1250,26 @@ async function resetOemGeocode() {
   }
 }
 
+async function clearGeoCache() {
+  const confirmed = confirm(
+    "Wipe the ENTIRE dealer_geo_cache table?\n\n" +
+      "Every dealer coordinate will be removed. Run \"Start geocode\" afterwards to re-populate.",
+  );
+  if (!confirmed) return;
+  const btn = qs("admin-geocode-clear-cache-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const payload = await fetchJson("/api/admin/geocode/clear-cache", { method: "POST", body: "{}" });
+    const removed = Number(payload?.removed || 0);
+    alert(`Cleared ${removed} dealer_geo_cache row(s). Run "Start geocode" to re-populate.`);
+    await refreshOverview();
+  } catch (err) {
+    alert(err.message || "Failed to clear geo cache.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function setupAdmin() {
   if (window.VIT?.initMakeSwitcher) {
     try {
@@ -1268,6 +1288,9 @@ async function setupAdmin() {
   });
   qs("admin-geocode-reset-oem-btn")?.addEventListener("click", () => {
     resetOemGeocode().catch((err) => console.error(err));
+  });
+  qs("admin-geocode-clear-cache-btn")?.addEventListener("click", () => {
+    clearGeoCache().catch((err) => console.error(err));
   });
   qs("admin-workers-repair-btn")?.addEventListener("click", () => {
     repairWorkerQueues().catch((err) => console.error(err));

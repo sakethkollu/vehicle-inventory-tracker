@@ -277,6 +277,16 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             conn.close()
         return jsonify({"ok": True, "removed": removed})
 
+    @app.post("/api/admin/geocode/clear-cache")
+    @require_admin_api
+    def admin_geocode_clear_cache():
+        conn = get_conn()
+        try:
+            removed = clear_dealer_geo_cache(conn)
+        finally:
+            conn.close()
+        return jsonify({"ok": True, "removed": removed})
+
     @app.post("/api/admin/workers/repair")
     @require_admin_api
     def admin_workers_repair():
