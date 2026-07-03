@@ -498,6 +498,20 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                 result={"count": result.get("count", 0), "seed_zips": result.get("seed_zips", 0)},
                 message=f"Synced {result.get('count', 0)} dealer(s).",
             )
+            conn = get_conn()
+            try:
+                remaining = int(dealer_geo_stats(conn).get("remaining", 0))
+            finally:
+                conn.close()
+            if remaining > 0 and not request_jobs().geocode_is_running():
+                try:
+                    request_jobs().start_geocode(
+                        limit=None,
+                        delay_sec=1.1,
+                        trigger_source="auto",
+                    )
+                except RuntimeError:
+                    pass
             return jsonify({"ok": True, "job_run_id": job_run_id, **result})
         except Exception as exc:
             store.finish(job_run_id, "failed", error=str(exc), message=f"Dealer sync failed: {exc}")

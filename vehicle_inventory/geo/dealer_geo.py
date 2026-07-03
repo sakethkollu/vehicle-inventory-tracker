@@ -1177,13 +1177,12 @@ def normalize_cached_states(conn: DbConnection) -> int:
 
 def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
     ensure_dealer_geo_cache_table(conn)
+    # Count all synced dealers, not only those with vehicle_runs rows (Mazda nationwide
+    # dealer sync populates dealers before any inventory ingest).
     total = conn.execute(
         """
         SELECT COUNT(DISTINCT d.dealer_cd) AS total
         FROM dealers d
-        WHERE EXISTS (
-            SELECT 1 FROM vehicle_runs vr WHERE vr.dealer_cd = d.dealer_cd
-        )
         """
     ).fetchone()
     geocoded = conn.execute(
@@ -1191,10 +1190,7 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
         SELECT COUNT(DISTINCT d.dealer_cd) AS total
         FROM dealers d
         JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
-        WHERE EXISTS (
-            SELECT 1 FROM vehicle_runs vr WHERE vr.dealer_cd = d.dealer_cd
-        )
-          AND dgc.latitude IS NOT NULL
+        WHERE dgc.latitude IS NOT NULL
           AND COALESCE(dgc.state, '') != ''
         """
     ).fetchone()
@@ -1203,10 +1199,7 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
         SELECT COUNT(DISTINCT d.dealer_cd) AS total
         FROM dealers d
         JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
-        WHERE EXISTS (
-            SELECT 1 FROM vehicle_runs vr WHERE vr.dealer_cd = d.dealer_cd
-        )
-          AND dgc.latitude IS NOT NULL
+        WHERE dgc.latitude IS NOT NULL
           AND COALESCE(dgc.state, '') != ''
           AND LENGTH(TRIM(COALESCE(dgc.state, ''))) <= 2
           AND {_preferred_geo_query_sql()}
@@ -1230,10 +1223,7 @@ def _fetch_dealers_needing_geocode(
     sql = """
         SELECT d.dealer_cd, d.dealer_marketing_name, d.dealer_website
         FROM dealers d
-        WHERE EXISTS (
-            SELECT 1 FROM vehicle_runs vr WHERE vr.dealer_cd = d.dealer_cd
-        )
-        AND (
+        WHERE (
             NOT EXISTS (
                 SELECT 1 FROM dealer_geo_cache dgc WHERE dgc.dealer_cd = d.dealer_cd
             )
@@ -1265,9 +1255,6 @@ def _fetch_all_inventory_dealers(
     sql = """
         SELECT d.dealer_cd, d.dealer_marketing_name, d.dealer_website
         FROM dealers d
-        WHERE EXISTS (
-            SELECT 1 FROM vehicle_runs vr WHERE vr.dealer_cd = d.dealer_cd
-        )
         ORDER BY d.dealer_cd
     """
     params: List = []
