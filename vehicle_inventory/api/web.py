@@ -950,11 +950,15 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
         )
 
         search_zip_arg = request.args.get("search_zip", "").strip()
-        distance_expr, distance_params = _distance_select_sql(
-            _resolve_search_coords(search_zip_arg or None)
-        )
         conn = get_conn(readonly=True)
         try:
+            if search_zip_arg:
+                from vehicle_inventory.geo.dealer_geo import backfill_postal_geo_cache
+
+                backfill_postal_geo_cache(conn, limit=250)
+            distance_expr, distance_params = _distance_select_sql(
+                _resolve_search_coords(search_zip_arg or None, conn=conn)
+            )
             base = conn.execute(
                 """
                 SELECT
@@ -1008,6 +1012,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                 JOIN runs r ON r.run_id = vr.run_id
                 LEFT JOIN dealers d ON d.dealer_cd = vr.dealer_cd
                 LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd
+                LEFT JOIN postal_geo_cache pgc
+                    ON pgc.postal_code = SUBSTRING(TRIM(COALESCE(dgc.postal_code, '')), 1, 5)
                 LEFT JOIN vehicle_prices p ON p.vin = vr.vin AND p.run_id = vr.run_id
                 WHERE vr.vin = ?
                 ORDER BY vr.run_id DESC

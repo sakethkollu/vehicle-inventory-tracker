@@ -6,8 +6,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from vehicle_inventory.db.backend import DbConnection, DbRow, fetchall_with_retry, fetchone_with_retry
 from vehicle_inventory.geo.dealer_geo import (
+    POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
+    backfill_postal_geo_cache,
+    dealer_coords_present_sql,
     geocode_postal_code,
+    haversine_to_dealer_miles_sql,
     normalize_us_zip,
 )
 from vehicle_inventory.db.run_scope import vehicle_runs_latest_join
@@ -146,11 +150,13 @@ def _parse_float_arg(args, key: str) -> Optional[float]:
         return None
 
 
-def _resolve_search_coords(search_zip: Optional[str]) -> Optional[Tuple[float, float]]:
+def _resolve_search_coords(
+    search_zip: Optional[str], *, conn: Optional[DbConnection] = None
+) -> Optional[Tuple[float, float]]:
     normalized = normalize_us_zip(search_zip or "")
     if not normalized:
         return None
-    return geocode_postal_code(normalized)
+    return geocode_postal_code(normalized, conn=conn)
 
 
 def _distance_select_sql(
@@ -163,14 +169,8 @@ def _distance_select_sql(
     """
     if search_coords is None:
         return "NULL", []
-    miles = haversine_miles_sql("?", "?")
-    # Not wrapped in MIN(): the base query is per-vehicle (not aggregated) and
-    # any GROUP BY variant already includes dgc.latitude/longitude, so a plain
-    # CASE expression is well defined in both cases.
-    expr = (
-        f"CASE WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL "
-        f"THEN ({miles}) END"
-    )
+    miles = haversine_to_dealer_miles_sql()
+    expr = f"CASE WHEN {dealer_coords_present_sql()} THEN ({miles}) END"
     lat, lng = search_coords
     return expr, [lat, lng, lat]
 
@@ -205,10 +205,12 @@ class InventoryFilters:
     sort_dir: str = "asc"
 
 
-def _inventory_reference_coords(filters: InventoryFilters) -> Optional[Tuple[float, float]]:
+def _inventory_reference_coords(
+    filters: InventoryFilters, *, conn: Optional[DbConnection] = None
+) -> Optional[Tuple[float, float]]:
     if not filters.search_zip:
         return None
-    return _resolve_search_coords(filters.search_zip)
+    return _resolve_search_coords(filters.search_zip, conn=conn)
 
 
 def _scoped_distance_max(filters: InventoryFilters) -> Optional[int]:
@@ -296,6 +298,8 @@ def _append_inventory_filters(
     where: List[str],
     params: List,
     filters: InventoryFilters,
+    *,
+    conn: Optional[DbConnection] = None,
 ) -> None:
     if filters.series_codes:
         placeholders = ",".join("?" for _ in filters.series_codes)
@@ -346,6 +350,8 @@ def _append_inventory_filters(
         distance_min=_scoped_distance_min(filters),
         state_codes=filters.state_codes,
         search_zip=filters.search_zip if filters.filter_by_distance else None,
+        joined_geo=True,
+        conn=conn,
     )
     if filters.active_only:
         where.append("v.is_active = 1")
@@ -361,11 +367,12 @@ def _inventory_scope(
     filters: InventoryFilters,
     *,
     include_wheels: bool = False,
+    conn: Optional[DbConnection] = None,
 ) -> Tuple[str, str, List, str, str, str]:
     run_join, run_params = vehicle_runs_latest_join(filters.series_codes or None)
     where: List[str] = []
     params: List = list(run_params)
-    _append_inventory_filters(where, params, filters)
+    _append_inventory_filters(where, params, filters, conn=conn)
 
     option_join = ""
     option_having = ""
@@ -388,6 +395,7 @@ def _inventory_scope(
         JOIN vehicle_prices p ON p.vin = v.vin AND p.run_id = vr.run_id
         LEFT JOIN dealers d ON d.dealer_cd = vr.dealer_cd
         LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd
+        {POSTAL_GEO_JOIN_SQL}
         {wheels_sql}
         {option_join}
     """
@@ -418,13 +426,16 @@ def _inventory_sql(
     filters: InventoryFilters,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    *,
+    conn: Optional[DbConnection] = None,
 ) -> Tuple[str, List]:
     from_sql, where_sql, params, group_sql, option_having, _option_join = _inventory_scope(
         filters,
         include_wheels=False,
+        conn=conn,
     )
     distance_expr, distance_params = _distance_select_sql(
-        _inventory_reference_coords(filters)
+        _inventory_reference_coords(filters, conn=conn)
     )
     select_sql = _inventory_select(include_wheels=False, distance_select=distance_expr)
     sql = f"""
@@ -451,16 +462,21 @@ def fetch_inventory_rows(
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> List[DbRow]:
-    sql, params = _inventory_sql(filters, limit=limit, offset=offset)
+    if filters.search_zip:
+        backfill_postal_geo_cache(conn, limit=250)
+    sql, params = _inventory_sql(filters, limit=limit, offset=offset, conn=conn)
     return fetchall_with_retry(conn, sql, params)
 
 
 def count_inventory_rows(
     conn: DbConnection, filters: InventoryFilters
 ) -> int:
+    if filters.search_zip:
+        backfill_postal_geo_cache(conn, limit=250)
     from_sql, where_sql, params, group_sql, option_having, _option_join = _inventory_scope(
         filters,
         include_wheels=False,
+        conn=conn,
     )
     if group_sql:
         row = fetchone_with_retry(

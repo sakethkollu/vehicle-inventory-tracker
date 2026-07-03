@@ -283,12 +283,20 @@ def _photon_zip_coords(zip_code: str) -> Optional[Tuple[float, float]]:
     return None
 
 
-def geocode_postal_code(zip_code: str) -> Optional[Tuple[float, float]]:
+def geocode_postal_code(
+    zip_code: str, *, conn: Optional[DbConnection] = None
+) -> Optional[Tuple[float, float]]:
     normalized = normalize_us_zip(zip_code)
     if not normalized:
         return None
+    if conn is not None:
+        cached_row = _fetch_postal_geo_cache(conn, normalized)
+        if cached_row is not None:
+            return cached_row
     cached = _zip_coords_cache.get(normalized)
     if cached is not None:
+        if conn is not None:
+            _store_postal_geo_cache(conn, normalized, cached)
         return cached
 
     coords = _nominatim_zip_coords(normalized)
@@ -298,6 +306,8 @@ def geocode_postal_code(zip_code: str) -> Optional[Tuple[float, float]]:
         coords = _photon_zip_coords(normalized)
     if coords is not None:
         _zip_coords_cache[normalized] = coords
+        if conn is not None:
+            _store_postal_geo_cache(conn, normalized, coords)
     return coords
 
 
@@ -346,6 +356,105 @@ def ensure_dealer_geo_cache_table(conn: DbConnection) -> None:
         )
         """
     )
+    ensure_postal_geo_cache_table(conn)
+
+
+def ensure_postal_geo_cache_table(conn: DbConnection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS postal_geo_cache (
+            postal_code VARCHAR(5) PRIMARY KEY,
+            latitude DOUBLE NOT NULL,
+            longitude DOUBLE NOT NULL,
+            geocoded_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _fetch_postal_geo_cache(
+    conn: DbConnection, postal_code: str
+) -> Optional[Tuple[float, float]]:
+    ensure_postal_geo_cache_table(conn)
+    row = conn.execute(
+        """
+        SELECT latitude, longitude
+        FROM postal_geo_cache
+        WHERE postal_code = ?
+        """,
+        (postal_code,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return float(row["latitude"]), float(row["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _store_postal_geo_cache(
+    conn: DbConnection, postal_code: str, coords: Tuple[float, float]
+) -> None:
+    ensure_postal_geo_cache_table(conn)
+    lat, lng = coords
+    execute_with_retry(
+        conn,
+        """
+        REPLACE INTO postal_geo_cache (postal_code, latitude, longitude, geocoded_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (postal_code, float(lat), float(lng), utc_now()),
+    )
+
+
+def backfill_postal_geo_cache(conn: DbConnection, *, limit: int = 250) -> int:
+    """Geocode distinct dealer postal codes missing from ``postal_geo_cache``."""
+    ensure_dealer_geo_cache_table(conn)
+    ensure_postal_geo_cache_table(conn)
+    rows = conn.execute(
+        """
+        SELECT DISTINCT TRIM(COALESCE(dgc.postal_code, '')) AS postal_code
+        FROM dealer_geo_cache dgc
+        WHERE TRIM(COALESCE(dgc.postal_code, '')) != ''
+          AND NOT EXISTS (
+              SELECT 1
+              FROM postal_geo_cache pgc
+              WHERE pgc.postal_code = SUBSTRING(TRIM(dgc.postal_code), 1, 5)
+          )
+        ORDER BY postal_code
+        LIMIT ?
+        """,
+        (max(1, int(limit or 250)),),
+    ).fetchall()
+    stored = 0
+    for row in rows:
+        normalized = normalize_us_zip(str(row["postal_code"] or ""))
+        if not normalized:
+            continue
+        coords = geocode_postal_code(normalized, conn=conn)
+        if coords is not None:
+            stored += 1
+    if stored:
+        commit_with_retry(conn)
+    return stored
+
+
+# Prefer geocoded ZIP centroids over dealer lat/lng when both exist. Dealer
+# geocoding can land on the wrong POI while the cached postal code is reliable.
+POSTAL_GEO_JOIN_SQL = """
+    LEFT JOIN postal_geo_cache pgc
+        ON pgc.postal_code = SUBSTRING(TRIM(COALESCE(dgc.postal_code, '')), 1, 5)
+"""
+DEALER_LAT_SQL = "COALESCE(pgc.latitude, dgc.latitude)"
+DEALER_LNG_SQL = "COALESCE(pgc.longitude, dgc.longitude)"
+
+
+def dealer_coords_present_sql() -> str:
+    return f"({DEALER_LAT_SQL} IS NOT NULL AND {DEALER_LNG_SQL} IS NOT NULL)"
+
+
+def haversine_to_dealer_miles_sql() -> str:
+    return haversine_miles_sql("?", "?", lat_col=DEALER_LAT_SQL, lng_col=DEALER_LNG_SQL)
 
 
 def clear_dealer_geo_cache(conn: DbConnection) -> int:
@@ -1309,6 +1418,9 @@ def _store_dealer_geo(
             """,
             (dealer_cd, query, lat, lon, postal_code or "", city or "", state or "", utc_now()),
         )
+        normalized_postal = normalize_us_zip(postal_code or "")
+        if normalized_postal:
+            _store_postal_geo_cache(conn, normalized_postal, (lat, lon))
         return normalize_state_code(state) is not None
     execute_with_retry(
         conn,
@@ -1530,14 +1642,14 @@ def reset_oem_provisional_geo(conn: DbConnection) -> int:
 
 
 def _haversine_miles_exists_sql(vr_alias: str) -> str:
-    miles = haversine_miles_sql("?", "?")
+    miles = haversine_to_dealer_miles_sql()
     return f"""
     EXISTS (
         SELECT 1
         FROM dealer_geo_cache dgc
+        {POSTAL_GEO_JOIN_SQL}
         WHERE dgc.dealer_cd = {vr_alias}.dealer_cd
-          AND dgc.latitude IS NOT NULL
-          AND dgc.longitude IS NOT NULL
+          AND {dealer_coords_present_sql()}
           AND ({miles}) {{op}} ?
     )
     """
@@ -1551,19 +1663,11 @@ def dealer_display_distance_sql(
     *,
     vr_alias: str = "vr",  # noqa: ARG001 - kept for API compatibility
 ) -> str:
-    """Return the real haversine distance from the search ZIP to the dealer.
-
-    ``vr.distance`` (from the OEM ingest) is intentionally NOT used as a
-    fallback: it is the distance from the ingest's query ZIP to the dealer,
-    which has nothing to do with the user's current search location. Mazda's
-    per-dealer refresh even sets it to a constant ``1`` for every row. If the
-    dealer has no geocoded coordinates, the distance is left NULL and the UI
-    should hide it.
-    """
+    """Return the haversine distance from the search ZIP to the dealer."""
     return f"""
         MIN(
             CASE
-                WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL THEN
+                WHEN {dealer_coords_present_sql()} THEN
                     ({haversine_miles_expr})
             END
         ) AS distance_miles
@@ -1586,10 +1690,16 @@ def _append_distance_max_filter(
     vr_alias: str,
     distance_max: int,
     search_coords: Optional[Tuple[float, float]] = None,
+    joined_geo: bool = False,
 ) -> None:
     if not search_coords:
         return
     lat, lng = search_coords
+    if joined_geo:
+        miles = haversine_to_dealer_miles_sql()
+        where.append(f"({dealer_coords_present_sql()} AND ({miles}) <= ?)")
+        params.extend([lat, lng, lat, int(distance_max)])
+        return
     haversine = _haversine_miles_exists_sql(vr_alias).format(op="<=")
     where.append(f"({haversine})")
     params.extend([lat, lng, lat, int(distance_max)])
@@ -1602,10 +1712,16 @@ def _append_distance_min_filter(
     vr_alias: str,
     distance_min: int,
     search_coords: Optional[Tuple[float, float]] = None,
+    joined_geo: bool = False,
 ) -> None:
     if not search_coords:
         return
     lat, lng = search_coords
+    if joined_geo:
+        miles = haversine_to_dealer_miles_sql()
+        where.append(f"({dealer_coords_present_sql()} AND ({miles}) >= ?)")
+        params.extend([lat, lng, lat, int(distance_min)])
+        return
     haversine = _haversine_miles_exists_sql(vr_alias).format(op=">=")
     where.append(f"({haversine})")
     params.extend([lat, lng, lat, int(distance_min)])
@@ -1620,13 +1736,15 @@ def append_run_location_filters(
     state_codes: Optional[List[str]] = None,
     search_zip: Optional[str] = None,
     vr_alias: str = "vr",
+    joined_geo: bool = False,
+    conn: Optional[DbConnection] = None,
 ) -> None:
     normalized_states = expand_state_filter_values(state_codes or []) if state_codes else []
     apply_distance = not normalized_states
 
     if apply_distance and (distance_max is not None or distance_min is not None):
         normalized_zip = normalize_us_zip(search_zip or "")
-        search_coords = geocode_postal_code(normalized_zip) if normalized_zip else None
+        search_coords = geocode_postal_code(normalized_zip, conn=conn) if normalized_zip else None
 
         if search_coords is None:
             logger.warning(
@@ -1641,6 +1759,7 @@ def append_run_location_filters(
                     vr_alias=vr_alias,
                     distance_max=int(distance_max),
                     search_coords=search_coords,
+                    joined_geo=joined_geo,
                 )
             if distance_min is not None:
                 _append_distance_min_filter(
@@ -1649,6 +1768,7 @@ def append_run_location_filters(
                     vr_alias=vr_alias,
                     distance_min=int(distance_min),
                     search_coords=search_coords,
+                    joined_geo=joined_geo,
                 )
 
     if normalized_states:

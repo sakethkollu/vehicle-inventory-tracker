@@ -215,6 +215,13 @@ CREATE TABLE IF NOT EXISTS dealer_geo_cache (
     geocoded_at TEXT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS postal_geo_cache (
+    postal_code VARCHAR(5) PRIMARY KEY,
+    latitude DOUBLE,
+    longitude DOUBLE,
+    geocoded_at TEXT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS series_latest_runs (
     series_code VARCHAR(64) PRIMARY KEY,
     run_id INT NOT NULL,

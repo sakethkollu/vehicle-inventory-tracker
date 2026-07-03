@@ -61,20 +61,22 @@
           <div id="dealer-values" class="dealer-filter-list" role="listbox" aria-multiselectable="true"></div>
           <small>Click dealers to filter. Search narrows the list.</small>
         </label>
-        <label>
-          Search ZIP
-          <input id="search-zip-code" type="text" value="" maxlength="10" inputmode="numeric" placeholder="e.g. 95132" />
-          <small>Shows distance from this ZIP to each dealer. Does not filter inventory unless enabled below.</small>
-        </label>
-        <label class="filter-toggle-row" for="filter-by-distance">
-          <input id="filter-by-distance" type="checkbox" />
-          Filter inventory by distance from search ZIP
-        </label>
-        <label id="distance-max-wrap">
-          Max Distance (mi)
-          <input id="distance-max-miles" type="number" min="1" max="5000" value="" placeholder="50" disabled />
-          <small>Only applies when distance filtering is enabled above.</small>
-        </label>
+        <div id="location-filter-wrap" class="location-filter-group">
+          <label>
+            Search ZIP
+            <input id="search-zip-code" type="text" value="" maxlength="10" inputmode="numeric" placeholder="e.g. 95132" />
+            <small>Shows distance from this ZIP to each dealer. Does not filter unless enabled below.</small>
+          </label>
+          <label id="distance-max-wrap">
+            Max Distance (mi)
+            <input id="distance-max-miles" type="number" min="1" max="5000" value="" placeholder="50" disabled />
+            <small>Only applies when distance filtering is enabled.</small>
+          </label>
+          <label class="checkbox location-filter-toggle" for="filter-by-distance">
+            <input id="filter-by-distance" type="checkbox" />
+            <span>Filter inventory by distance from search ZIP</span>
+          </label>
+        </div>
         <label>
           State (multi-select)
           <div id="state-selected-pills" class="filter-pills hidden"></div>

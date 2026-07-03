@@ -3,11 +3,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from vehicle_inventory.db.backend import DbConnection
 from vehicle_inventory.geo.dealer_geo import (
+    POSTAL_GEO_JOIN_SQL,
     append_run_location_filters,
+    backfill_postal_geo_cache,
     dealer_display_distance_sql,
     ensure_dealer_geo_cache_table,
     expand_state_filter_values,
     geocode_postal_code,
+    haversine_to_dealer_miles_sql,
     normalize_dealer_display_distance,
     normalize_state_code,
     normalize_us_zip,
@@ -95,6 +98,8 @@ def parse_filter_context(args) -> FilterContext:
 def _build_vehicle_scope(
     ctx: FilterContext,
     exclude: Optional[str] = None,
+    *,
+    conn: Optional[DbConnection] = None,
 ) -> Tuple[str, str, List]:
     joins: List[str] = []
     where = ["1=1"]
@@ -104,6 +109,15 @@ def _build_vehicle_scope(
     run_join, run_params = vehicle_runs_latest_join(run_series)
     joins.append(run_join)
     params.extend(run_params)
+
+    needs_geo_join = (
+        ctx.filter_by_distance
+        and not (exclude in {"distance", "state"})
+        and (ctx.distance_max is not None or ctx.distance_min is not None)
+    )
+    if needs_geo_join:
+        joins.append("LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd")
+        joins.append(POSTAL_GEO_JOIN_SQL.strip())
 
     if exclude != "series" and ctx.series_codes:
         placeholders = ",".join("?" for _ in ctx.series_codes)
@@ -164,6 +178,8 @@ def _build_vehicle_scope(
         distance_min=ctx.distance_min if ctx.filter_by_distance and not location_excluded else None,
         state_codes=ctx.state_codes if exclude != "state" else None,
         search_zip=ctx.search_zip if ctx.filter_by_distance and not location_excluded else None,
+        joined_geo=needs_geo_join,
+        conn=conn,
     )
 
     from_sql = f"vehicles v {' '.join(joins)}".strip()
@@ -179,7 +195,7 @@ def _query_model_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="model"    )
+        ctx, exclude="model", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -207,7 +223,7 @@ def _query_exterior_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="exterior"    )
+        ctx, exclude="exterior", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -245,7 +261,7 @@ def _query_interior_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="interior"    )
+        ctx, exclude="interior", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -282,7 +298,7 @@ def _query_drivetrain_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="drivetrain"    )
+        ctx, exclude="drivetrain", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -313,7 +329,7 @@ def _query_stage_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="stage"    )
+        ctx, exclude="stage", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -344,7 +360,7 @@ def _query_option_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="option"    )
+        ctx, exclude="option", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -378,11 +394,13 @@ def _dealer_join_suffix() -> str:
     return " LEFT JOIN dealers d ON d.dealer_cd = vr.dealer_cd"
 
 
-def _filter_reference_coords(ctx: FilterContext) -> Optional[Tuple[float, float]]:
+def _filter_reference_coords(
+    ctx: FilterContext, *, conn: Optional[DbConnection] = None
+) -> Optional[Tuple[float, float]]:
     if expand_state_filter_values(ctx.state_codes or []):
         return None
     if ctx.search_zip:
-        return geocode_postal_code(ctx.search_zip)
+        return geocode_postal_code(ctx.search_zip, conn=conn)
     return None
 
 
@@ -391,13 +409,17 @@ def _query_dealer_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="dealer"    )
-    geo_join = " LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd"
-    ref = _filter_reference_coords(ctx)
+        ctx, exclude="dealer", conn=conn
+    )
+    geo_join = (
+        " LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd"
+        f"{POSTAL_GEO_JOIN_SQL}"
+    )
+    ref = _filter_reference_coords(ctx, conn=conn)
 
     if ref:
         lat, lng = ref
-        miles = haversine_miles_sql("?", "?")
+        miles = haversine_to_dealer_miles_sql()
         distance_sql = dealer_display_distance_sql(miles)
         universe_rows = conn.execute(
             f"""
@@ -449,7 +471,7 @@ def _query_state_facets(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="state"    )
+        ctx, exclude="state", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -519,7 +541,7 @@ def _merge_facet_rows(
 
 def _context_vehicle_count(
     conn: DbConnection, ctx: FilterContext) -> int:
-    from_sql, where_sql, params = _build_vehicle_scope(ctx)
+    from_sql, where_sql, params = _build_vehicle_scope(ctx, conn=conn)
     row = conn.execute(
         f"SELECT COUNT(DISTINCT v.vin) AS total FROM {from_sql} WHERE {where_sql}",
         params,
@@ -532,7 +554,7 @@ def _query_series_list(
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         FilterContext(active_only=ctx.active_only)    )
     available_from, available_where, available_params = _build_vehicle_scope(
-        ctx, exclude="series"    )
+        ctx, exclude="series", conn=conn)
 
     universe_rows = conn.execute(
         f"""
@@ -570,7 +592,7 @@ def _materialize_filter_scopes(conn: DbConnection, ctx: FilterContext) -> None:
     universe_from, universe_where, universe_params = _build_vehicle_scope(
         _series_only_context(ctx)
     )
-    available_from, available_where, available_params = _build_vehicle_scope(ctx)
+    available_from, available_where, available_params = _build_vehicle_scope(ctx, conn=conn)
 
     conn.execute("DROP TABLE IF EXISTS _filter_universe")
     conn.execute(
@@ -815,6 +837,8 @@ def _context_vehicle_count_from_scope(conn: DbConnection) -> int:
 
 def build_filters_payload(conn: DbConnection, ctx: FilterContext) -> Dict:
     ensure_dealer_geo_cache_table(conn)
+    if ctx.search_zip:
+        backfill_postal_geo_cache(conn, limit=250)
 
     latest_run_row = conn.execute("SELECT MAX(run_id) AS max_run_id FROM runs").fetchone()
     latest_run_id = latest_run_row["max_run_id"] if latest_run_row else None
