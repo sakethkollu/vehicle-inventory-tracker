@@ -197,6 +197,7 @@ def persist_mazda_dealers(db: InventoryDb, dealers: List[MazdaDealer], ts: str) 
             ts,
         )
         if (dealer.lat or dealer.lon) and not (dealer.lat == 0.0 and dealer.lon == 0.0):
+            state = normalize_state_code(dealer.state) or (dealer.state or "").strip()
             store_dealer_geo_coordinates(
                 db.conn,
                 str(dealer.dealer_id),
@@ -204,8 +205,8 @@ def persist_mazda_dealers(db: InventoryDb, dealers: List[MazdaDealer], ts: str) 
                 longitude=dealer.lon,
                 postal_code=dealer.zip_code,
                 city=dealer.city,
-                state=dealer.state,
-                query_text=f"{dealer.name}, {dealer.city}, {dealer.state} {dealer.zip_code}",
+                state=state,
+                query_text=f"{dealer.name}, {dealer.city}, {state} {dealer.zip_code}",
             )
         elif dealer.zip_code:
             state = normalize_state_code(dealer.state) or (dealer.state or "").strip()

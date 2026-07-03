@@ -7,8 +7,8 @@ from vehicle_inventory.geo.dealer_geo import (
 )
 
 
-def test_is_preferred_geo_query_includes_oem():
-    assert _is_preferred_geo_query("oem:Mazda of Irvine, CA 92618") is True
+def test_is_preferred_geo_query_excludes_oem_provisional():
+    assert _is_preferred_geo_query("oem:Mazda of Irvine, CA 92618") is False
     assert _is_preferred_geo_query("website:https://example.com") is True
     assert _is_preferred_geo_query("95132, Irvine, CA") is False
 

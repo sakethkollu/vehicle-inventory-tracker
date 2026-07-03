@@ -1054,7 +1054,10 @@ function renderOverview(payload) {
       ? `${Number(geoStats.remaining || 0).toLocaleString()} dealer(s) remaining`
       : "No message",
     geoStats.geocoded != null && geoStats.dealers_in_inventory != null
-      ? `${Number(geoStats.geocoded).toLocaleString()}/${Number(geoStats.dealers_in_inventory).toLocaleString()} dealers geocoded`
+      ? `${Number(geoStats.geocoded).toLocaleString()}/${Number(geoStats.dealers_in_inventory).toLocaleString()} fully geocoded`
+      : null,
+    geoStats.oem_provisional > 0
+      ? `${Number(geoStats.oem_provisional).toLocaleString()} with OEM coords only (pending full geocode)`
       : null,
     geocode.processed > 0 && geocode.total > 0
       ? `${Number(geocode.processed).toLocaleString()}/${Number(geocode.total).toLocaleString()} processed this run`

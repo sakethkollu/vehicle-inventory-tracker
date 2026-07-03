@@ -1042,13 +1042,47 @@ def _google_maps_geocode_query(query: str, *, dealer_name: str = "") -> Optional
     return geo
 
 
+def _is_oem_provisional_geo_sql(column: str = "dgc.query_text") -> str:
+    col = f"TRIM(COALESCE({column}, ''))"
+    return f"{col} LIKE 'oem:%'"
+
+
+def _is_fully_geocoded_sql() -> str:
+    return f"""dgc.latitude IS NOT NULL
+          AND dgc.longitude IS NOT NULL
+          AND COALESCE(dgc.state, '') != ''
+          AND LENGTH(TRIM(COALESCE(dgc.state, ''))) <= 2
+          AND NOT ({_is_oem_provisional_geo_sql()})"""
+
+
+def _dealer_needs_geocode_sql() -> str:
+    return f"""(
+            NOT EXISTS (
+                SELECT 1 FROM dealer_geo_cache dgc WHERE dgc.dealer_cd = d.dealer_cd
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM dealer_geo_cache dgc
+                WHERE dgc.dealer_cd = d.dealer_cd
+                  AND (
+                    dgc.latitude IS NULL
+                    OR dgc.longitude IS NULL
+                    OR COALESCE(dgc.state, '') = ''
+                    OR LENGTH(TRIM(COALESCE(dgc.state, ''))) > 2
+                    OR {_is_oem_provisional_geo_sql()}
+                  )
+            )
+        )"""
+
+
 def _is_preferred_geo_query(query_text: str) -> bool:
     text = (query_text or "").strip()
+    if text.startswith("oem:"):
+        return False
     return (
         text.startswith("website")
         or text.startswith("photon:")
         or text.startswith("toyota.com:")
-        or text.startswith("oem:")
     )
 
 
@@ -1058,7 +1092,6 @@ def _preferred_geo_query_sql(column: str = "dgc.query_text") -> str:
             {col} LIKE 'website%'
             OR {col} LIKE 'photon:%'
             OR {col} LIKE 'toyota.com:%'
-            OR {col} LIKE 'oem:%'
           )"""
 
 
@@ -1186,12 +1219,20 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
         """
     ).fetchone()
     geocoded = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT d.dealer_cd) AS total
+        FROM dealers d
+        JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
+        WHERE {_is_fully_geocoded_sql()}
         """
+    ).fetchone()
+    oem_provisional = conn.execute(
+        f"""
         SELECT COUNT(DISTINCT d.dealer_cd) AS total
         FROM dealers d
         JOIN dealer_geo_cache dgc ON dgc.dealer_cd = d.dealer_cd
         WHERE dgc.latitude IS NOT NULL
-          AND COALESCE(dgc.state, '') != ''
+          AND {_is_oem_provisional_geo_sql()}
         """
     ).fetchone()
     preferred = conn.execute(
@@ -1208,9 +1249,11 @@ def dealer_geo_stats(conn: DbConnection) -> Dict[str, int]:
     total_count = int(total["total"]) if total else 0
     geocoded_count = int(geocoded["total"]) if geocoded else 0
     preferred_count = int(preferred["total"]) if preferred else 0
+    oem_provisional_count = int(oem_provisional["total"]) if oem_provisional else 0
     return {
         "dealers_in_inventory": total_count,
         "geocoded": geocoded_count,
+        "oem_provisional": oem_provisional_count,
         "preferred_geocoded": preferred_count,
         "remaining": max(0, total_count - geocoded_count),
     }
@@ -1220,25 +1263,10 @@ def _fetch_dealers_needing_geocode(
     conn: DbConnection, limit: Optional[int]
 ) -> List[DbRow]:
     ensure_dealer_geo_cache_table(conn)
-    sql = """
+    sql = f"""
         SELECT d.dealer_cd, d.dealer_marketing_name, d.dealer_website
         FROM dealers d
-        WHERE (
-            NOT EXISTS (
-                SELECT 1 FROM dealer_geo_cache dgc WHERE dgc.dealer_cd = d.dealer_cd
-            )
-            OR EXISTS (
-                SELECT 1
-                FROM dealer_geo_cache dgc
-                WHERE dgc.dealer_cd = d.dealer_cd
-                  AND (
-                    dgc.latitude IS NULL
-                    OR dgc.longitude IS NULL
-                    OR COALESCE(dgc.state, '') = ''
-                    OR LENGTH(TRIM(COALESCE(dgc.state, ''))) > 2
-                  )
-            )
-        )
+        WHERE {_dealer_needs_geocode_sql()}
         ORDER BY d.dealer_cd
     """
     params: List = []
