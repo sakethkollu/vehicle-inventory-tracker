@@ -405,12 +405,12 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     def inventory_export():
         filters = parse_inventory_filters(request.args)
         payload = inventory_response(filters, paginate=False)
+        make = current_make()
         csv_text = build_inventory_csv(payload.get("items") or [], make_slug=make.slug)
         run_id = payload.get("latest_run_id") or "export"
         series = "-".join(filters.series_codes) if filters.series_codes else "all"
         if len(series) > 48:
             series = f"{len(filters.series_codes)}_series"
-        make = current_make()
         filename = f"inventory_{make.slug}_{series}_run{run_id}.csv"
         return Response(
             csv_text,
