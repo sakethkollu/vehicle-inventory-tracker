@@ -5017,7 +5017,11 @@ async function exportSelectedVehiclesPdf() {
       if (btn) {
         btn.textContent = `Loading ${i + 1}/${orderedVins.length}…`;
       }
-      const data = await fetchJson(`/api/vehicle/${encodeURIComponent(vin)}`);
+      const { searchZip: pdfSearchZip } = getLocationFilterParams();
+      const detailUrl =
+        `/api/vehicle/${encodeURIComponent(vin)}` +
+        (pdfSearchZip ? `?search_zip=${encodeURIComponent(pdfSearchZip)}` : "");
+      const data = await fetchJson(detailUrl);
       let imageDataUrl = "";
       const imageUrl = pickCarJellyImageUrl(data);
       if (imageUrl) {
@@ -5403,7 +5407,11 @@ function startGeocodePolling() {
 }
 
 async function openVehicleDetail(vin) {
-  const data = await fetchJson(`/api/vehicle/${encodeURIComponent(vin)}`);
+  const { searchZip } = getLocationFilterParams();
+  const url =
+    `/api/vehicle/${encodeURIComponent(vin)}` +
+    (searchZip ? `?search_zip=${encodeURIComponent(searchZip)}` : "");
+  const data = await fetchJson(url);
   qs("vehicle-detail").classList.remove("hidden");
   qs("detail-backdrop").classList.remove("hidden");
   qs("vehicle-detail").setAttribute("aria-hidden", "false");

@@ -119,11 +119,18 @@ def _inventory_item_to_price_row(item: Dict) -> Dict:
 
 
 def _scoped_price_sql(filters: InventoryFilters) -> Tuple[str, List]:
-    from vehicle_inventory.api.inventory import _inventory_scope
+    from vehicle_inventory.api.inventory import (
+        _distance_select_sql,
+        _inventory_scope,
+        _resolve_search_coords,
+    )
 
     from_sql, where_sql, params, group_sql, option_having, _option_join = _inventory_scope(
         filters,
         include_wheels=False,
+    )
+    distance_expr, distance_params = _distance_select_sql(
+        _resolve_search_coords(filters.search_zip)
     )
     sql = f"""
         SELECT
@@ -134,14 +141,14 @@ def _scoped_price_sql(filters: InventoryFilters) -> Tuple[str, List]:
             COALESCE(p.advertized_price, p.non_sp_advertized_price) AS price,
             COALESCE(p.total_msrp, p.base_msrp) AS msrp,
             vr.dealer_cd,
-            vr.distance,
+            {distance_expr} AS distance,
             d.dealer_marketing_name
         {from_sql}
         WHERE {where_sql}
         {group_sql}
         {option_having}
     """
-    return sql, params
+    return sql, [*distance_params, *params]
 
 
 def _pick_metric(rows: List[Dict]) -> Tuple[str, List[float]]:

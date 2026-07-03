@@ -942,6 +942,15 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
     @app.get("/api/vehicle/<vin>")
     def vehicle_detail(vin: str):
+        from vehicle_inventory.api.inventory import (
+            _distance_select_sql,
+            _resolve_search_coords,
+        )
+
+        search_zip_arg = request.args.get("search_zip", "").strip()
+        distance_expr, distance_params = _distance_select_sql(
+            _resolve_search_coords(search_zip_arg or None)
+        )
         conn = get_conn(readonly=True)
         try:
             base = conn.execute(
@@ -975,7 +984,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                 return jsonify({"error": "VIN not found"}), 404
 
             latest_run = conn.execute(
-                """
+                f"""
                 SELECT
                     vr.run_id,
                     r.queried_at,
@@ -986,7 +995,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                     vr.inventory_status,
                     vr.allocation_stage_code,
                     vr.allocation_stage_label,
-                    vr.distance,
+                    {distance_expr} AS distance,
                     vr.vdp_url,
                     p.advertized_price,
                     p.non_sp_advertized_price,
@@ -996,12 +1005,13 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
                 FROM vehicle_runs vr
                 JOIN runs r ON r.run_id = vr.run_id
                 LEFT JOIN dealers d ON d.dealer_cd = vr.dealer_cd
+                LEFT JOIN dealer_geo_cache dgc ON dgc.dealer_cd = vr.dealer_cd
                 LEFT JOIN vehicle_prices p ON p.vin = vr.vin AND p.run_id = vr.run_id
                 WHERE vr.vin = ?
                 ORDER BY vr.run_id DESC
                 LIMIT 1
                 """,
-                (vin,),
+                (*distance_params, vin),
             ).fetchone()
 
             options = [

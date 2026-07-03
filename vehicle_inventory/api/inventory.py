@@ -5,9 +5,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from vehicle_inventory.db.backend import DbConnection, DbRow, fetchall_with_retry, fetchone_with_retry
-from vehicle_inventory.geo.dealer_geo import append_run_location_filters, normalize_us_zip
+from vehicle_inventory.geo.dealer_geo import (
+    append_run_location_filters,
+    geocode_postal_code,
+    normalize_us_zip,
+)
 from vehicle_inventory.db.run_scope import vehicle_runs_latest_join
-from vehicle_inventory.db.sql_compat import ensure_index
+from vehicle_inventory.db.sql_compat import ensure_index, haversine_miles_sql
 
 
 INVENTORY_SELECT = """
@@ -24,7 +28,7 @@ INVENTORY_SELECT = """
     vr.inventory_status,
     vr.allocation_stage_code,
     vr.allocation_stage_label,
-    vr.distance,
+    {distance_select} AS distance,
     vr.vdp_url,
     dgc.postal_code AS dealer_postal_code,
     dgc.city AS dealer_city,
@@ -71,11 +75,12 @@ INVENTORY_GROUP = """
         vr.inventory_status,
         vr.allocation_stage_code,
         vr.allocation_stage_label,
-        vr.distance,
         vr.vdp_url,
         dgc.postal_code,
         dgc.city,
         dgc.state,
+        dgc.latitude,
+        dgc.longitude,
         p.advertized_price,
         p.total_msrp,
         p.base_msrp,
@@ -94,7 +99,8 @@ INVENTORY_ORDER = """
     ORDER BY
         (p.advertized_price IS NULL) ASC,
         p.advertized_price ASC,
-        vr.distance ASC
+        (distance IS NULL) ASC,
+        distance ASC
 """
 
 SORTABLE_INVENTORY_COLUMNS: Dict[str, str] = {
@@ -113,10 +119,37 @@ SORTABLE_INVENTORY_COLUMNS: Dict[str, str] = {
         "(COALESCE(NULLIF(p.advertized_price, 0), NULLIF(p.non_sp_advertized_price, 0)) "
         "- COALESCE(NULLIF(p.total_msrp, 0), NULLIF(p.base_msrp, 0)))"
     ),
-    "distance": "vr.distance",
+    # Sorted via the aliased distance expression built from the user's search ZIP.
+    "distance": "distance",
     "exterior_color_name": "v.exterior_color_name",
     "interior_color_name": "v.interior_color_name",
 }
+
+
+def _resolve_search_coords(search_zip: Optional[str]) -> Optional[Tuple[float, float]]:
+    normalized = normalize_us_zip(search_zip or "")
+    if not normalized:
+        return None
+    return geocode_postal_code(normalized)
+
+
+def _distance_select_sql(
+    search_coords: Optional[Tuple[float, float]],
+) -> Tuple[str, List]:
+    """Return the SQL expression + params for the user-relative distance column.
+
+    Distance is the haversine miles between the user's search ZIP and the
+    dealer's geocoded coordinates. If either is missing the column is NULL.
+    """
+    if search_coords is None:
+        return "NULL", []
+    miles = haversine_miles_sql("?", "?")
+    expr = (
+        f"MIN(CASE WHEN dgc.latitude IS NOT NULL AND dgc.longitude IS NOT NULL "
+        f"THEN ({miles}) END)"
+    )
+    lat, lng = search_coords
+    return expr, [lat, lng, lat]
 
 
 @dataclass
@@ -342,9 +375,14 @@ def build_inventory_query(
     return where_sql, params, option_join, option_having
 
 
-def _inventory_select(*, include_wheels: bool) -> str:
+def _inventory_select(
+    *,
+    include_wheels: bool,
+    distance_select: str,
+) -> str:
     wheel_expr = "wheels.wheel_options" if include_wheels else "NULL AS wheel_options"
-    return INVENTORY_SELECT.replace("wheels.wheel_options", wheel_expr)
+    select = INVENTORY_SELECT.replace("wheels.wheel_options", wheel_expr)
+    return select.format(distance_select=distance_select)
 
 
 def _inventory_sql(
@@ -356,21 +394,26 @@ def _inventory_sql(
         filters,
         include_wheels=False,
     )
+    distance_expr, distance_params = _distance_select_sql(
+        _resolve_search_coords(filters.search_zip)
+    )
+    select_sql = _inventory_select(include_wheels=False, distance_select=distance_expr)
     sql = f"""
-        SELECT {_inventory_select(include_wheels=False)}
+        SELECT {select_sql}
         {from_sql}
         WHERE {where_sql}
         {group_sql}
         {option_having}
         {_inventory_order_clause(filters)}
     """
+    combined_params = [*distance_params, *params]
     if limit is not None:
         sql += " LIMIT ?"
-        params = [*params, limit]
+        combined_params.append(limit)
     if offset is not None:
         sql += " OFFSET ?"
-        params = [*params, offset]
-    return sql, params
+        combined_params.append(offset)
+    return sql, combined_params
 
 
 def fetch_inventory_rows(
